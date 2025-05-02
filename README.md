@@ -1,4 +1,4 @@
-# KLVR Charger Emulator
+# KLVR Charger Pro Emulator
 
 A 48-slot charger emulator that replicates the KLVR Charger Pro API and device behavior.
 
