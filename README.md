@@ -1,59 +1,91 @@
-# klvr-emulator
+# KLVR Charger Emulator
 
-## Project Overview
-The `klvr-emulator` project is a web application designed to emulate a specific functionality. It is structured to separate concerns between the application logic, templates, and static files.
+A 48-slot charger emulator that replicates the KLVR Charger Pro API and device behavior.
 
-## Directory Structure
+---
+
+## 🧰 Requirements
+
+- Python 3.11+
+- Git
+- macOS or Linux
+
+---
+
+## ⚡ Quickstart
+
+```bash
+git clone https://github.com/klvr-no/klvr-emulator.git
+cd klvr-emulator
+chmod +x start.sh
+./start.sh
 ```
-klvr-emulator/
-├── klvr_emulator/
-│   ├── __init__.py
-│   └── main.py
-├── templates/
-│   └── index.html
-├── static/
-│   └── style.css
-├── run.py
-├── start.sh
-├── requirements.txt
-└── README.md
+
+This script will:
+- Create a virtual environment
+- Install dependencies
+- Start the emulator server
+
+---
+
+## 🌐 Access the Web UI
+
+Once running, open your browser to:
+- [http://localhost:8000](http://localhost:8000)
+- Or on LAN: `http://<your-ip>:8000`
+
+---
+
+## 💡 Features
+
+- Web UI showing 48 charger slots in physical layout
+- Individual Insert AA, Insert AAA, and Eject controls per slot
+- Simulates charging with live SoC updates
+- CORS-enabled API for integration testing
+- Bonjour/mDNS service broadcast (_klvrcharger._tcp.local)
+
+---
+
+## 📡 API Endpoints
+
+### Charger Status
+```
+GET /api/v2/charger/status
 ```
 
-## File Descriptions
+### Device Info
+```
+GET /api/v2/device/info
+```
 
-- **klvr_emulator/__init__.py**: Initializes the `klvr_emulator` package. This file can be used to define package-level variables or import specific classes or functions for easier access.
+### Insert Battery
+```
+POST /api/v2/charger/insert/{slot}?type=KLVR-AA
+```
 
-- **klvr_emulator/main.py**: The main entry point for the application. It contains the application setup, route definitions, and necessary imports.
+### Eject Battery
+```
+POST /api/v2/charger/eject/{slot}
+```
 
-- **templates/index.html**: An HTML template that will be rendered by the application. It contains the structure and layout of the web pages.
+---
 
-- **static/style.css**: Contains the CSS styles for the application, used to style the HTML templates.
+## 🧼 Cleanup
+To stop:
+```bash
+Ctrl+C
+```
+To deactivate environment:
+```bash
+deactivate
+```
 
-- **run.py**: Used to run the application. It includes code to start a web server or execute the main application logic.
+---
 
-- **start.sh**: A shell script to automate the startup process of the application, including commands to set up the environment and run the application.
+## 📡 Bonjour / mDNS
+Broadcasts via:
+```
+_KLVR Charger Pro._klvrcharger._tcp.local
+```
 
-- **requirements.txt**: Lists the dependencies required for the project, used by package managers to install the necessary libraries.
-
-## Setup Instructions
-1. Clone the repository:
-   ```
-   git clone <repository-url>
-   cd klvr-emulator
-   ```
-
-2. Install the required dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-
-3. Run the application:
-   ```
-   python run.py
-   ```
-
-## Usage
-After starting the application, navigate to `http://localhost:5000` in your web browser to access the emulator.
-
-## Contributing
-Contributions are welcome! Please submit a pull request or open an issue for any suggestions or improvements.
+Discovered automatically by compatible KLVR client apps.
