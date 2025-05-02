@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>KLVR Emulator</title>
+    <style>
+        body { font-family: sans-serif; }
+        .row { display: flex; flex-wrap: nowrap; margin-bottom: 16px; }
+        .slot {
+            border: 1px solid #ccc;
+            padding: 6px;
+            margin: 2px;
+            width: 140px;
+            font-size: 12px;
+            text-align: center;
+        }
+        .slot button {
+            display: block;
+            width: 100%;
+            margin-top: 2px;
+        }
+    </style>
+</head>
+<body>
+    <h1>KLVR Emulator UI</h1>
+    <div id="top-row" class="row"></div>
+    <div id="bottom-row" class="row"></div>
+
+    <h2>API Response</h2>
+    <pre id="status"></pre>
+
+    <script>
+        async function load() {
+            const res = await fetch('/api/v2/charger/status');
+            const data = await res.json();
+
+            const top = document.getElementById('top-row');
+            const bot = document.getElementById('bottom-row');
+            top.innerHTML = '';
+            bot.innerHTML = '';
+
+            data.batteries.forEach(b => {
+                const container = b.slot < 24 ? top : bot;
+                const div = document.createElement('div');
+                div.className = 'slot';
+                div.innerHTML = `
+                    <strong>Slot ${b.slot}</strong><br>
+                    ${b.slotState}<br>
+                    ${b.stateOfChargePercent.toFixed(1)}%<br>
+                    ${b.timeRemainingSeconds}s<br>
+                    ${b.batteryDetected || '-'}<br>
+                    <button onclick="insert(${b.slot}, 'KLVR-AA')">Insert AA</button>
+                    <button onclick="insert(${b.slot}, 'KLVR-AAA')">Insert AAA</button>
+                    <button onclick="eject(${b.slot})">Eject</button>
+                `;
+                container.appendChild(div);
+            });
+
+            document.getElementById('status').innerText = JSON.stringify(data, null, 2);
+        }
+
+        async function insert(slot, type) {
+            await fetch(`/api/v2/charger/insert/${slot}?type=${type}`, { method: 'POST' });
+            load();
+        }
+
+        async function eject(slot) {
+            await fetch(`/api/v2/charger/eject/${slot}`, { method: 'POST' });
+            load();
+        }
+
+        setInterval(load, 2000);
+        load();
+    </script>
+</body>
+</html>
