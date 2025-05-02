@@ -139,5 +139,8 @@ def bonjour():
     z.register_service(info)
     atexit.register(lambda: z.unregister_service(info))
 
+    print(f"Emulator running at http://{host_ip}:8000")
+
+
 threading.Thread(target=loop, daemon=True).start()
 threading.Thread(target=bonjour, daemon=True).start()
