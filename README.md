@@ -25,6 +25,13 @@ This script will:
 - Create a virtual environment
 - Install dependencies
 - Start the emulator server
+- Print the active IP address the emulator is running on
+
+Example output:
+```
+Resolved local IP address: 10.0.1.42
+Emulator running at http://10.0.1.42:8000
+```
 
 ---
 
@@ -32,7 +39,7 @@ This script will:
 
 Once running, open your browser to:
 - [http://localhost:8000](http://localhost:8000)
-- Or on LAN: `http://<your-ip>:8000`
+- Or on LAN: `http://<your-ip>:8000` (printed in terminal)
 
 ---
 
@@ -43,30 +50,74 @@ Once running, open your browser to:
 - Simulates charging with live SoC updates
 - CORS-enabled API for integration testing
 - Bonjour/mDNS service broadcast (_klvrcharger._tcp.local)
+- IP address printed at startup for discovery on local network
 
 ---
 
 ## 📡 API Endpoints
 
+These endpoints simulate the KLVR Charger Pro firmware interface. All endpoints support CORS and return JSON. Designed for local testing and third-party integrations.
+
 ### Charger Status
+Returns a full list of all 48 slots and their current charge state.
 ```
 GET /api/v2/charger/status
 ```
+Response:
+```json
+{
+  "deviceStatus": "ok",
+  "batteries": [
+    { "slot": 0, "slotState": "charging", ... },
+    ...
+  ]
+}
+```
 
 ### Device Info
+Returns static info about the charger including firmware and network info.
 ```
 GET /api/v2/device/info
 ```
+Response:
+```json
+{
+  "name": "Laddare #1",
+  "firmwareVersion": "0.1.0",
+  "firmwareBuild": "abc123",
+  "deviceInternalTemperatureC": 24.01,
+  "ip": {
+    "ipAddress": "...",
+    "gatewayAddress": "...",
+    "mask": "...",
+    "macAddress": "...",
+    "method": "dhcp"
+  }
+}
+```
 
 ### Insert Battery
+Simulates inserting a battery into a slot.
 ```
 POST /api/v2/charger/insert/{slot}?type=KLVR-AA
 ```
+Accepted values for `type`: `KLVR-AA`, `KLVR-AAA`
 
 ### Eject Battery
+Removes the battery and resets slot state.
 ```
 POST /api/v2/charger/eject/{slot}
 ```
+
+### (Planned for extension)
+```
+POST /api/v2/device/firmware         # Stub: accept firmware update
+POST /api/v2/device/identify         # Stub: trigger blink indicator
+POST /api/v2/device/network          # Stub: simulate network config
+POST /api/v2/device/name             # Stub: rename device
+```
+
+These are exposed but not fully implemented.
 
 ---
 
