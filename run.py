@@ -1,6 +1,5 @@
 import socket
 import uvicorn
-import netifaces
 from klvr_emulator.main import app
 
 def find_available_port(start_port=8000, max_tries=50):
@@ -13,9 +12,14 @@ def find_available_port(start_port=8000, max_tries=50):
                 continue
     raise RuntimeError("❌ No available ports found in range 8000–8050")
 
-def get_local_ip(interface="en0"):
+def get_local_ip():
     try:
-        return netifaces.ifaddresses(interface)[netifaces.AF_INET][0]["addr"]
+        # Create a dummy socket connection to detect local IP (no traffic sent)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
     except Exception:
         return "localhost"
 
