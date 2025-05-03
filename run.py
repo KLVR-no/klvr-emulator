@@ -2,7 +2,7 @@ import socket
 import uvicorn
 from klvr_emulator.main import app
 
-def find_available_port(start_port=8000, max_tries=50):
+def find_available_port(start_port=9000, max_tries=50):
     for port in range(start_port, start_port + max_tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
