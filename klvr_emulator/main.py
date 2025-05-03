@@ -126,8 +126,3 @@ def bonjour():
 # Start background threads
 threading.Thread(target=loop, daemon=True).start()
 threading.Thread(target=bonjour, daemon=True).start()
-```
-
-> 🧠 Remember: `run.py` must set `klvr_emulator.main.runtime_port = port` **before** calling `uvicorn.run(...)`.
-
-Let me know if you want the `run.py` shown again with matching updates!
