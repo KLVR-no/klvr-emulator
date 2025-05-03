@@ -23,8 +23,16 @@ def get_local_ip():
     except Exception:
         return "localhost"
 
+
+from klvr_emulator import main as emulator_main
+
 if __name__ == "__main__":
     port = find_available_port()
     ip = get_local_ip()
+
+    # Pass the actual port to main.py
+    emulator_main.runtime_port = port
+
     print(f"✅ Emulator running at http://{ip}:{port}")
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run(emulator_main.app, host="0.0.0.0", port=port, log_level="info")
+
