@@ -1,20 +1,6 @@
-# Directory structure
-#
-# klvr-emulator/
-# ├── klvr_emulator/
-# │   ├── __init__.py
-# │   └── main.py
-# ├── templates/
-# │   └── index.html
-# ├── static/
-# │   └── style.css (optional)
-# ├── run.py
-# ├── start.sh
-# ├── requirements.txt
-# └── README.md (already in canvas)
+Here's your updated, complete `main.py` with proper support for dynamic ports from `run.py`:
 
-# klvr_emulator/main.py
-
+```python
 import socket
 import threading
 import time
@@ -24,10 +10,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from zeroconf import ServiceInfo, Zeroconf
-import uvicorn
 
 # Get local IP
-
 def get_host_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -39,6 +23,7 @@ def get_host_ip():
         s.close()
 
 host_ip = get_host_ip()
+runtime_port = 8000  # Will be overwritten by run.py
 
 app = FastAPI()
 
@@ -115,7 +100,6 @@ def ui():
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Charging simulation
-
 def loop():
     while True:
         for b in charger_state["batteries"]:
@@ -132,15 +116,19 @@ def bonjour():
         type_="_klvrcharger._tcp.local.",
         name="KLVR Charger Pro._klvrcharger._tcp.local.",
         addresses=[socket.inet_aton(host_ip)],
-        port=8000,
+        port=runtime_port,
         properties={"version": "0.1.0", "model": "emulator"},
         server="klvr-emulator.local."
     )
     z.register_service(info)
     atexit.register(lambda: z.unregister_service(info))
+    print(f"✅ Emulator running at http://{host_ip}:{runtime_port}")
 
-    print(f"Emulator running at http://{host_ip}:8000")
-
-
+# Start background threads
 threading.Thread(target=loop, daemon=True).start()
 threading.Thread(target=bonjour, daemon=True).start()
+```
+
+> 🧠 Remember: `run.py` must set `klvr_emulator.main.runtime_port = port` **before** calling `uvicorn.run(...)`.
+
+Let me know if you want the `run.py` shown again with matching updates!
