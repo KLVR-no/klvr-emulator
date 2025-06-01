@@ -111,7 +111,7 @@ def bonjour():
     z = Zeroconf()
     info = ServiceInfo(
         type_="_klvrcharger._tcp.local.",
-        name="KLVR Charger Pro._klvrcharger._tcp.local.",
+        name="KLVR " + socket.gethostname() + "._klvrcharger._tcp.local.",
         addresses=[socket.inet_aton(host_ip)],
         port=runtime_port,
         properties={"version": "0.1.0", "model": "emulator"},
