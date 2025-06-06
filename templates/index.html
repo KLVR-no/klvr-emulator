@@ -58,12 +58,89 @@
     .slot button:hover {
       background: #cbd5e1;
     }
+    .charge-input {
+      width: 50px;
+      padding: 2px 4px;
+      border: 1px solid #e2e8f0;
+      border-radius: 3px;
+      font-size: 11px;
+      text-align: center;
+      transition: border-color 0.2s ease;
+    }
+    .charge-input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+    }
+    .charge-input[data-editing="true"] {
+      border-color: #10b981;
+      background-color: #f0fdf4;
+    }
     pre {
       background: #f1f5f9;
       padding: 12px;
       border-radius: 6px;
       font-size: 12px;
       overflow-x: auto;
+    }
+    .firmware-testing {
+      background: white;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+    .firmware-testing h3 {
+      margin: 0 0 16px 0;
+      color: #1e293b;
+      font-weight: 600;
+    }
+    .firmware-controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .firmware-controls input {
+      padding: 8px 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: 'Inter', sans-serif;
+      transition: border-color 0.2s ease;
+    }
+    .firmware-controls input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+    .firmware-controls input[data-editing="true"] {
+      border-color: #10b981;
+      background-color: #f0fdf4;
+    }
+    .firmware-controls button {
+      padding: 8px 16px;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: 'Inter', sans-serif;
+    }
+    .firmware-controls button:hover {
+      background: #2563eb;
+    }
+    .device-info {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 12px;
+      margin: 16px 0;
+      font-size: 14px;
+      font-family: monospace;
     }
 </style>
 </head>
@@ -73,35 +150,103 @@
     <h1>Charger Pro Emulator</h1>
   </header>
 
+  <div class="firmware-testing">
+    <h3>🔧 Firmware Testing</h3>
+    <div class="device-info" id="deviceInfo">Loading device info...</div>
+    <div class="firmware-controls">
+      <label for="firmwareVersion">Manual Firmware Version:</label>
+      <input type="text" id="firmwareVersion" placeholder="e.g. 0.1.5" value="0.1.0">
+      <button onclick="setFirmwareVersion()">Set Version</button>
+      <button onclick="resetFirmware()">Reset to 1.5.0</button>
+    </div>
+  </div>
+
   <div class="grid" id="slots"></div>
 
   <h2>API Response</h2>
   <pre id="status"></pre>
 
   <script>
+    async function loadDeviceInfo() {
+      try {
+        const res = await fetch('/api/v2/device/info');
+        const data = await res.json();
+        document.getElementById('deviceInfo').innerHTML = `
+          <strong>Device:</strong> ${data.name}<br>
+          <strong>Firmware Version:</strong> ${data.firmwareVersion}<br>
+          <strong>Status:</strong> ${data.status}<br>
+          <strong>IP:</strong> ${data.ip.ipAddress}
+        `;
+        
+        // Only update input field if it's not currently focused/being edited
+        const firmwareInput = document.getElementById('firmwareVersion');
+        if (document.activeElement !== firmwareInput && !firmwareInput.dataset.editing) {
+          firmwareInput.value = data.firmwareVersion;
+        }
+      } catch (e) {
+        document.getElementById('deviceInfo').innerHTML = `<span style="color: red;">Error loading device info</span>`;
+      }
+    }
+
     async function load() {
       const res = await fetch('/api/v2/charger/status');
       const data = await res.json();
       const grid = document.getElementById('slots');
-      grid.innerHTML = '';
-
-      data.batteries.forEach(b => {
-        const div = document.createElement('div');
-        div.className = 'slot';
-        div.innerHTML = `
-          <h4>Slot ${b.slot}</h4>
-          State: ${b.slotState}<br>
-          Charge: ${b.stateOfChargePercent.toFixed(1)}%<br>
-          Remaining: ${b.timeRemainingSeconds}s<br>
-          Type: ${b.batteryDetected || '-'}<br>
-          <button onclick="insert(${b.slot}, 'KLVR-AA')">Insert AA</button>
-          <button onclick="insert(${b.slot}, 'KLVR-AAA')">Insert AAA</button>
-          <button onclick="eject(${b.slot})">Eject</button>
-        `;
-        grid.appendChild(div);
-      });
+      
+      // Check if this is first load or if we need to rebuild
+      const shouldRebuild = grid.children.length !== data.batteries.length;
+      
+      if (shouldRebuild) {
+        // Full rebuild only when necessary
+        grid.innerHTML = '';
+        data.batteries.forEach(b => {
+          const div = document.createElement('div');
+          div.className = 'slot';
+          div.innerHTML = `
+            <h4>Slot ${b.slot}</h4>
+            <div class="slot-state">State: <span id="state-${b.slot}">${b.slotState}</span></div>
+            <div class="slot-charge">Charge: <input type="number" id="charge-${b.slot}" class="charge-input" value="${b.stateOfChargePercent.toFixed(1)}" min="0" max="100" step="0.1">%</div>
+            <div class="slot-remaining">Remaining: <span id="remaining-${b.slot}">${b.timeRemainingSeconds}</span>s</div>
+            <div class="slot-type">Type: <span id="type-${b.slot}">${b.batteryDetected || '-'}</span></div>
+            <div class="slot-buttons">
+              <button onclick="insert(${b.slot}, 'KLVR-AA')">Insert AA</button>
+              <button onclick="insert(${b.slot}, 'KLVR-AAA')">Insert AAA</button>
+              <button onclick="eject(${b.slot})">Eject</button>
+            </div>
+          `;
+          grid.appendChild(div);
+          
+          // Setup input protection for new inputs
+          const chargeInput = document.getElementById(`charge-${b.slot}`);
+          if (chargeInput) {
+            setupInputProtection(chargeInput);
+          }
+        });
+      } else {
+        // Update existing elements without rebuilding DOM
+        data.batteries.forEach(b => {
+          // Update state
+          const stateElement = document.getElementById(`state-${b.slot}`);
+          if (stateElement) stateElement.textContent = b.slotState;
+          
+          // Update remaining time
+          const remainingElement = document.getElementById(`remaining-${b.slot}`);
+          if (remainingElement) remainingElement.textContent = b.timeRemainingSeconds;
+          
+          // Update battery type
+          const typeElement = document.getElementById(`type-${b.slot}`);
+          if (typeElement) typeElement.textContent = b.batteryDetected || '-';
+          
+          // Update charge input only if not being edited
+          const chargeInput = document.getElementById(`charge-${b.slot}`);
+          if (chargeInput && document.activeElement !== chargeInput && !chargeInput.dataset.editing) {
+            chargeInput.value = b.stateOfChargePercent.toFixed(1);
+          }
+        });
+      }
 
       document.getElementById('status').innerText = JSON.stringify(data, null, 2);
+      await loadDeviceInfo();
     }
 
     async function insert(slot, type) {
@@ -113,6 +258,120 @@
       await fetch(`/api/v2/charger/eject/${slot}`, { method: 'POST' });
       load();
     }
+
+    async function setFirmwareVersion() {
+      const version = document.getElementById('firmwareVersion').value;
+      try {
+        const res = await fetch('/api/v2/device/set_firmware_version', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ version: version })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          await loadDeviceInfo();
+          console.log(`✅ Firmware version set to: ${data.firmwareVersion}`);
+        }
+      } catch (e) {
+        console.error('❌ Error setting firmware version:', e);
+      }
+    }
+
+    async function resetFirmware() {
+      document.getElementById('firmwareVersion').value = '1.5.0';
+      await setFirmwareVersion();
+    }
+
+    async function setChargePercentage(slot) {
+      const input = document.getElementById(`charge-${slot}`);
+      const percentage = parseFloat(input.value);
+      
+      if (isNaN(percentage) || percentage < 0 || percentage > 100) {
+        console.error(`❌ Invalid percentage: ${input.value}`);
+        return;
+      }
+      
+      try {
+        const res = await fetch(`/api/v2/charger/set_charge/${slot}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ percentage: percentage })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          console.log(`✅ Set slot ${slot} charge to: ${percentage}%`);
+        }
+      } catch (e) {
+        console.error(`❌ Error setting charge for slot ${slot}:`, e);
+      }
+    }
+
+    // Function to setup input protection for any input field
+    function setupInputProtection(inputElement) {
+      let enterPressed = false;
+      
+      // Mark as editing when user focuses the input
+      inputElement.addEventListener('focus', function() {
+        this.dataset.editing = 'true';
+      });
+      
+      // Mark as editing when user starts typing
+      inputElement.addEventListener('input', function() {
+        this.dataset.editing = 'true';
+      });
+      
+      // Handle Enter key press
+      inputElement.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault(); // Prevent default form submission
+          enterPressed = true;
+          delete this.dataset.editing;
+          
+          // Trigger specific action based on input type
+          if (inputElement.id === 'firmwareVersion') {
+            setFirmwareVersion();
+          } else if (inputElement.id.startsWith('charge-')) {
+            const slot = parseInt(inputElement.id.replace('charge-', ''));
+            console.log(`🎯 Enter pressed - updating slot ${slot} charge to: ${inputElement.value}%`);
+            setChargePercentage(slot);
+          }
+          
+          // Blur the input to remove focus
+          this.blur();
+          
+          // Reset flag after a short delay
+          setTimeout(() => {
+            enterPressed = false;
+          }, 200);
+        }
+      });
+      
+      // Stop editing state after a delay when focus is lost
+      inputElement.addEventListener('blur', function() {
+        setTimeout(() => {
+          delete this.dataset.editing;
+        }, 500); // 500ms delay to allow for quick refocus
+      });
+      
+      // For charge inputs, also trigger update when focus is lost (but not if Enter was pressed)
+      if (inputElement.id && inputElement.id.startsWith('charge-')) {
+        inputElement.addEventListener('blur', function() {
+          if (!enterPressed) {
+            setTimeout(() => {
+              const slot = parseInt(inputElement.id.replace('charge-', ''));
+              console.log(`🎯 Blur event - updating slot ${slot} charge to: ${inputElement.value}%`);
+              setChargePercentage(slot);
+            }, 100);
+          }
+        });
+      }
+    }
+
+    // Add event listeners to track input editing state
+    document.addEventListener('DOMContentLoaded', function() {
+      const firmwareInput = document.getElementById('firmwareVersion');
+      setupInputProtection(firmwareInput);
+    });
 
     setInterval(load, 2000);
     load();
