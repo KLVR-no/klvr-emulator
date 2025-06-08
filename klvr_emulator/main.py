@@ -93,7 +93,7 @@ def get_device_info():
         status = "ready"
     
     return {
-        "name": charger_state["name"],
+        "name": f"KLVR Emulator Port {runtime_port}",
         "firmwareVersion": charger_state["firmwareVersion"],
         "ip": {
             "ipAddress": charger_state["network"]["ipAddress"],
@@ -121,6 +121,81 @@ def eject(slot: int):
     b["timeRemainingSeconds"] = 0
     b["batteryDetected"] = ""
     return {"ok": True}
+
+@app.post("/api/v2/charger/bulk_insert")
+def bulk_insert():
+    """Insert 37 batteries with random types (AA/AAA) and SOC levels, always including 4-5 full batteries"""
+    import random
+    
+    # First, clear all slots
+    for b in charger_state["batteries"]:
+        b["slotState"] = "empty"
+        b["stateOfChargePercent"] = 0.0
+        b["timeRemainingSeconds"] = 0
+        b["batteryDetected"] = ""
+    
+    # Define battery types
+    battery_types = ["KLVR-AA", "KLVR-AAA"]
+    
+    # Insert 37 batteries in random slots (0-47, total 48 slots)
+    slots_to_fill = random.sample(range(48), 37)
+    
+    # Determine how many full batteries to include (4-5)
+    full_batteries_count = random.randint(4, 5)
+    full_battery_slots = random.sample(slots_to_fill, full_batteries_count)
+    
+    batteries_inserted = []
+    full_count = 0
+    
+    for slot in slots_to_fill:
+        # Random battery type
+        battery_type = random.choice(battery_types)
+        
+        # Set SOC - 100% for selected full battery slots, random for others
+        if slot in full_battery_slots:
+            soc = 100.0
+            full_count += 1
+            slot_state = "done"  # ← FIXED: Use "done" not "complete"
+            time_remaining = 0
+        else:
+            # Random SOC between 5% and 95% for non-full batteries
+            soc = random.uniform(5.0, 95.0)
+            slot_state = "charging"
+            # Calculate remaining time based on SOC
+            # Charging goes from 5% to 100% (95% range) in 7200 seconds (2 hours)
+            remaining_charge_needed = max(0, 100.0 - soc)
+            total_charge_range = 95.0  # From 5% to 100%
+            total_time_for_full_charge = 7200  # 2 hours in seconds
+            time_remaining = int((remaining_charge_needed / total_charge_range) * total_time_for_full_charge)
+        
+        # Update battery
+        b = charger_state["batteries"][slot]
+        b["slotState"] = slot_state
+        b["stateOfChargePercent"] = soc
+        b["timeRemainingSeconds"] = time_remaining
+        b["batteryDetected"] = battery_type
+        
+        batteries_inserted.append({
+            "slot": slot,
+            "type": battery_type,
+            "soc": round(soc, 1),
+            "timeRemaining": time_remaining
+        })
+    
+    print(f"🔋 Bulk inserted 37 batteries: {len([b for b in batteries_inserted if b['type'] == 'KLVR-AA'])} AA, {len([b for b in batteries_inserted if b['type'] == 'KLVR-AAA'])} AAA ({full_count} full)")
+    
+    return {
+        "ok": True,
+        "message": f"Successfully inserted 37 batteries ({full_count} full)",
+        "batteries": batteries_inserted,
+        "summary": {
+            "total": len(batteries_inserted),
+            "aa_count": len([b for b in batteries_inserted if b["type"] == "KLVR-AA"]),
+            "aaa_count": len([b for b in batteries_inserted if b["type"] == "KLVR-AAA"]),
+            "avg_soc": round(sum(b["soc"] for b in batteries_inserted) / len(batteries_inserted), 1),
+            "full_batteries": full_count
+        }
+    }
 
 # Firmware Update Endpoints
 
@@ -365,17 +440,23 @@ def loop():
 
 def bonjour():
     z = Zeroconf()
+    # Generate MAC-like identifier for this emulator instance (based on port)
+    # Format: klvrXXXXXXXXXXXX (simulating MAC address pattern)
+    simulated_mac = f"0080e1{runtime_port:06x}"  # Use port to create unique MAC-like ID
+    service_name = f"klvr{simulated_mac}"
+    
     info = ServiceInfo(
         type_="_klvrcharger._tcp.local.",
-        name="KLVR " + socket.gethostname() + "._klvrcharger._tcp.local.",
+        name=f"{service_name}._klvrcharger._tcp.local.",
         addresses=[socket.inet_aton(host_ip)],
         port=runtime_port,
-        properties={"version": "0.1.0", "model": "emulator"},
-        server="klvr-emulator.local."
+        properties={"version": "0.1.0", "model": "emulator", "port": str(runtime_port)},
+        server=f"klvr-emulator-{runtime_port}.local."
     )
     z.register_service(info)
     atexit.register(lambda: z.unregister_service(info))
     print(f"✅ Emulator running at http://{host_ip}:{runtime_port}")
+    print(f"🔗 Bonjour service registered as: {service_name}")
 
 # Start background threads
 threading.Thread(target=loop, daemon=True).start()

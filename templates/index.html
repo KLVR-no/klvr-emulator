@@ -133,6 +133,12 @@
     .firmware-controls button:hover {
       background: #2563eb;
     }
+    .firmware-controls button[style*="background: #10b981"]:hover {
+      background: #059669 !important;
+    }
+    .firmware-controls button[style*="background: #ef4444"]:hover {
+      background: #dc2626 !important;
+    }
     .device-info {
       background: #f8fafc;
       border: 1px solid #e2e8f0;
@@ -158,6 +164,11 @@
       <input type="text" id="firmwareVersion" placeholder="e.g. 0.1.5" value="0.1.0">
       <button onclick="setFirmwareVersion()">Set Version</button>
       <button onclick="resetFirmware()">Reset to 1.5.0</button>
+    </div>
+    <div class="firmware-controls" style="margin-top: 12px; border-top: 1px solid #e2e8f0; padding-top: 12px;">
+      <label><strong>Battery Testing:</strong></label>
+      <button onclick="bulkInsertBatteries()" style="background: #10b981;">🔋 Insert 37 Random Batteries</button>
+      <button onclick="clearAllBatteries()" style="background: #ef4444;">🗑️ Clear All Batteries</button>
     </div>
   </div>
 
@@ -280,6 +291,43 @@
     async function resetFirmware() {
       document.getElementById('firmwareVersion').value = '1.5.0';
       await setFirmwareVersion();
+    }
+
+    async function bulkInsertBatteries() {
+      try {
+        console.log('🔋 Starting bulk battery insertion...');
+        const res = await fetch('/api/v2/charger/bulk_insert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await res.json();
+        if (data.ok) {
+          console.log(`✅ Successfully inserted ${data.summary.total} batteries:`);
+          console.log(`   - ${data.summary.aa_count} AA batteries`);
+          console.log(`   - ${data.summary.aaa_count} AAA batteries`);
+          console.log(`   - ${data.summary.full_batteries} full batteries (100%)`);
+          console.log(`   - Average SOC: ${data.summary.avg_soc}%`);
+          await load(); // Refresh the UI
+        }
+      } catch (e) {
+        console.error('❌ Error inserting batteries:', e);
+      }
+    }
+
+    async function clearAllBatteries() {
+      try {
+        console.log('🗑️ Clearing all batteries...');
+        // Eject all batteries by calling eject for each slot
+        const promises = [];
+        for (let slot = 0; slot < 48; slot++) {
+          promises.push(fetch(`/api/v2/charger/eject/${slot}`, { method: 'POST' }));
+        }
+        await Promise.all(promises);
+        console.log('✅ All batteries cleared');
+        await load(); // Refresh the UI
+      } catch (e) {
+        console.error('❌ Error clearing batteries:', e);
+      }
     }
 
     async function setChargePercentage(slot) {
