@@ -69,6 +69,7 @@ firmware_state = {
 ws_clients: list[WebSocket] = []
 ws_lock = asyncio.Lock()
 pending_push: bool = False  # debounce flag
+_event_loop: asyncio.AbstractEventLoop | None = None  # captured at startup
 
 
 async def ws_broadcast():
@@ -108,11 +109,17 @@ async def ws_debounce_push():
 
 
 def notify_state_change():
-    """Call whenever battery state changes. Triggers a debounced WS push."""
+    """Call whenever battery state changes. Triggers a debounced WS push.
+
+    Safe to call from sync FastAPI endpoints (thread-pool executors): uses
+    run_coroutine_threadsafe so we always schedule on the uvicorn event loop
+    rather than calling asyncio.create_task(), which only works from inside
+    a running coroutine.
+    """
     global pending_push
-    if not pending_push:
+    if not pending_push and _event_loop is not None:
         pending_push = True
-        asyncio.create_task(ws_debounce_push())
+        asyncio.run_coroutine_threadsafe(ws_debounce_push(), _event_loop)
 
 
 @app.websocket("/api/v2/ws")
@@ -136,6 +143,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.on_event("startup")
 async def startup():
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
     asyncio.create_task(ws_heartbeat())
 
 
@@ -541,17 +550,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Charging simulation — runs in a background thread
 def loop():
-    loop_event_loop = None
-
-    def get_event_loop():
-        nonlocal loop_event_loop
-        if loop_event_loop is None:
-            try:
-                loop_event_loop = asyncio.get_event_loop()
-            except RuntimeError:
-                pass
-        return loop_event_loop
-
     while True:
         changed = False
         for b in charger_state["batteries"]:
@@ -567,13 +565,11 @@ def loop():
                     b["timeRemainingSeconds"] = 0
                 changed = True
 
-        if changed:
-            ev = get_event_loop()
-            if ev is not None:
-                try:
-                    asyncio.run_coroutine_threadsafe(ws_broadcast(), ev)
-                except Exception:
-                    pass
+        if changed and _event_loop is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(ws_broadcast(), _event_loop)
+            except Exception:
+                pass
 
         time.sleep(2)
 
