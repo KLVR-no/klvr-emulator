@@ -3,7 +3,8 @@ import threading
 import time
 import atexit
 import asyncio
-from fastapi import FastAPI, Request, Query, HTTPException
+import json
+from fastapi import FastAPI, Request, Query, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -30,6 +31,7 @@ charger_state = {
     "deviceInternalTemperatureC": 24.01,
     "firmwareVersion": "0.1.0",
     "firmwareBuild": "abc123",
+    "deviceStatus": "ok",
     "network": {
         "ipAddress": host_ip,
         "gatewayAddress": "10.0.0.1",
@@ -39,7 +41,7 @@ charger_state = {
     },
     "batteries": [
         {
-            "slot": i,
+            "index": i,
             "batteryBayTempC": 24.0,
             "slotState": "empty",
             "stateOfChargePercent": 0.0,
@@ -63,35 +65,109 @@ firmware_state = {
     "rear_rebooting": False
 }
 
+# WebSocket state — firmware supports WS_MAX_CLIENTS=8; emulator caps at 2
+ws_clients: list[WebSocket] = []
+ws_lock = asyncio.Lock()
+pending_push: bool = False  # debounce flag
+
+
+async def ws_broadcast():
+    """Send current status to all connected WS clients."""
+    payload = {
+        "event": "battery_status",
+        "data": {
+            "deviceStatus": charger_state.get("deviceStatus", "ok"),
+            "batteries": charger_state["batteries"]
+        }
+    }
+    msg = json.dumps(payload)
+    async with ws_lock:
+        dead = []
+        for client in ws_clients:
+            try:
+                await client.send_text(msg)
+            except Exception:
+                dead.append(client)
+        for d in dead:
+            ws_clients.remove(d)
+
+
+async def ws_heartbeat():
+    """Push every 10 seconds regardless of state changes (WS_HEARTBEAT_MS=10000)."""
+    while True:
+        await asyncio.sleep(10)
+        await ws_broadcast()
+
+
+async def ws_debounce_push():
+    """Push 250 ms after a state change is flagged (WS_DEBOUNCE_MS=250)."""
+    global pending_push
+    await asyncio.sleep(0.25)
+    pending_push = False
+    await ws_broadcast()
+
+
+def notify_state_change():
+    """Call whenever battery state changes. Triggers a debounced WS push."""
+    global pending_push
+    if not pending_push:
+        pending_push = True
+        asyncio.create_task(ws_debounce_push())
+
+
+@app.websocket("/api/v2/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    async with ws_lock:
+        if len(ws_clients) >= 2:
+            await websocket.close(code=1008)  # Policy violation — max clients
+            return
+        ws_clients.append(websocket)
+    # Send immediately on connect
+    await ws_broadcast()
+    try:
+        while True:
+            await websocket.receive_text()  # Keep connection alive; ignore incoming
+    except WebSocketDisconnect:
+        async with ws_lock:
+            if websocket in ws_clients:
+                ws_clients.remove(websocket)
+
+
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(ws_heartbeat())
+
+
 @app.middleware("http")
 async def add_cors(request: Request, call_next):
     response = await call_next(request)
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
+
 @app.get("/api/v2/charger/status")
 def get_status():
     return {
-        "deviceStatus": "ok",
+        "deviceStatus": charger_state.get("deviceStatus", "ok"),
         "batteries": charger_state["batteries"]
     }
 
+
 @app.get("/api/v2/device/info")
 def get_device_info():
-    # Check if any board is rebooting
     main_rebooting = firmware_state.get("main_rebooting", False)
     rear_rebooting = firmware_state.get("rear_rebooting", False)
-    
-    # Determine status based on rebooting state
+
     if main_rebooting and rear_rebooting:
         status = "rebooting_both"
     elif main_rebooting:
-        status = "rebooting_main" 
+        status = "rebooting_main"
     elif rear_rebooting:
         status = "rebooting_rear"
     else:
         status = "ready"
-    
+
     return {
         "name": f"KLVR Emulator Port {runtime_port}",
         "firmwareVersion": charger_state["firmwareVersion"],
@@ -104,14 +180,27 @@ def get_device_info():
         "status": status
     }
 
+
+@app.get("/api/v2/device/firmware_version")
+def get_firmware_version():
+    return {
+        "firmwareRear": charger_state["firmwareVersion"],
+        "firmwareMain": charger_state["firmwareVersion"]
+    }
+
+
 @app.post("/api/v2/charger/insert/{slot}")
 def insert(slot: int, type: str = Query(...)):
     b = charger_state["batteries"][slot]
+    # Recovery: cold/warm batteries transition back to charging on re-insert
     b["slotState"] = "charging"
     b["stateOfChargePercent"] = 5.0
-    b["timeRemainingSeconds"] = 7200  # 2 hours = 7200 seconds
+    b["timeRemainingSeconds"] = 7200
     b["batteryDetected"] = type
+    b["errorMsg"] = ""
+    notify_state_change()
     return {"ok": True}
+
 
 @app.post("/api/v2/charger/eject/{slot}")
 def eject(slot: int):
@@ -120,70 +209,64 @@ def eject(slot: int):
     b["stateOfChargePercent"] = 0.0
     b["timeRemainingSeconds"] = 0
     b["batteryDetected"] = ""
+    b["errorMsg"] = ""
+    notify_state_change()
     return {"ok": True}
+
 
 @app.post("/api/v2/charger/bulk_insert")
 def bulk_insert():
     """Insert 37 batteries with random types (AA/AAA) and SOC levels, always including 4-5 full batteries"""
     import random
-    
-    # First, clear all slots
+
     for b in charger_state["batteries"]:
         b["slotState"] = "empty"
         b["stateOfChargePercent"] = 0.0
         b["timeRemainingSeconds"] = 0
         b["batteryDetected"] = ""
-    
-    # Define battery types
+        b["errorMsg"] = ""
+
     battery_types = ["KLVR-AA", "KLVR-AAA"]
-    
-    # Insert 37 batteries in random slots (0-47, total 48 slots)
     slots_to_fill = random.sample(range(48), 37)
-    
-    # Determine how many full batteries to include (4-5)
     full_batteries_count = random.randint(4, 5)
     full_battery_slots = random.sample(slots_to_fill, full_batteries_count)
-    
+
     batteries_inserted = []
     full_count = 0
-    
+
     for slot in slots_to_fill:
-        # Random battery type
         battery_type = random.choice(battery_types)
-        
-        # Set SOC - 100% for selected full battery slots, random for others
+
         if slot in full_battery_slots:
             soc = 100.0
             full_count += 1
-            slot_state = "done"  # ← FIXED: Use "done" not "complete"
+            slot_state = "done"
             time_remaining = 0
         else:
-            # Random SOC between 5% and 95% for non-full batteries
             soc = random.uniform(5.0, 95.0)
             slot_state = "charging"
-            # Calculate remaining time based on SOC
-            # Charging goes from 5% to 100% (95% range) in 7200 seconds (2 hours)
             remaining_charge_needed = max(0, 100.0 - soc)
-            total_charge_range = 95.0  # From 5% to 100%
-            total_time_for_full_charge = 7200  # 2 hours in seconds
+            total_charge_range = 95.0
+            total_time_for_full_charge = 7200
             time_remaining = int((remaining_charge_needed / total_charge_range) * total_time_for_full_charge)
-        
-        # Update battery
+
         b = charger_state["batteries"][slot]
         b["slotState"] = slot_state
         b["stateOfChargePercent"] = soc
         b["timeRemainingSeconds"] = time_remaining
         b["batteryDetected"] = battery_type
-        
+        b["errorMsg"] = ""
+
         batteries_inserted.append({
-            "slot": slot,
+            "index": slot,
             "type": battery_type,
             "soc": round(soc, 1),
             "timeRemaining": time_remaining
         })
-    
+
     print(f"🔋 Bulk inserted 37 batteries: {len([b for b in batteries_inserted if b['type'] == 'KLVR-AA'])} AA, {len([b for b in batteries_inserted if b['type'] == 'KLVR-AAA'])} AAA ({full_count} full)")
-    
+
+    notify_state_change()
     return {
         "ok": True,
         "message": f"Successfully inserted 37 batteries ({full_count} full)",
@@ -197,6 +280,47 @@ def bulk_insert():
         }
     }
 
+
+@app.post("/api/v2/charger/set_cold/{slot}")
+def set_cold(slot: int):
+    """Set a slot to cold state (BATTERY_STATE_TEMP_COLD)."""
+    if slot < 0 or slot >= 48:
+        raise HTTPException(status_code=400, detail="Invalid slot number")
+    b = charger_state["batteries"][slot]
+    b["slotState"] = "cold"
+    b["errorMsg"] = "cold"
+    notify_state_change()
+    return {"ok": True}
+
+
+@app.post("/api/v2/charger/set_warm/{slot}")
+def set_warm(slot: int):
+    """Set a slot to warm state (BATTERY_STATE_TEMP_WARM)."""
+    if slot < 0 or slot >= 48:
+        raise HTTPException(status_code=400, detail="Invalid slot number")
+    b = charger_state["batteries"][slot]
+    b["slotState"] = "warm"
+    b["errorMsg"] = "warm"
+    notify_state_change()
+    return {"ok": True}
+
+
+VALID_ERROR_TYPES = {"overtemp", "undertemp", "overcurrent", "faulty", "detect_err"}
+
+@app.post("/api/v2/charger/set_error/{slot}")
+def set_error(slot: int, type: str = Query(...)):
+    """Set a slot to error state with a specific errorMsg."""
+    if slot < 0 or slot >= 48:
+        raise HTTPException(status_code=400, detail="Invalid slot number")
+    if type not in VALID_ERROR_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid error type. Must be one of: {', '.join(sorted(VALID_ERROR_TYPES))}")
+    b = charger_state["batteries"][slot]
+    b["slotState"] = "error"
+    b["errorMsg"] = type
+    notify_state_change()
+    return {"ok": True}
+
+
 # Firmware Update Endpoints
 
 @app.post("/api/v2/device/firmware_charger")
@@ -205,37 +329,34 @@ async def upload_main_firmware(request: Request, version: str = Query(default=No
     try:
         firmware_data = await request.body()
         firmware_size = len(firmware_data)
-        
-        # Simple version detection with debugging
+
         print(f"🔍 MAIN: Query params: {dict(request.query_params)}")
         print(f"🔍 MAIN: All headers: {dict(request.headers)}")
-        
-        # Get version (simplified - try multiple sources)
+
         simulated_version = (
-            version or  # Query parameter
-            request.headers.get("x-firmware-version") or 
+            version or
+            request.headers.get("x-firmware-version") or
             request.headers.get("firmware-version") or
-            "1.6.3"  # Default to expected version
+            "1.6.3"
         )
-        
+
         print(f"✅ Received main firmware: {firmware_size:,} bytes (version: {simulated_version})")
         firmware_state["main_firmware_size"] = firmware_size
         firmware_state["main_firmware_pending"] = True
         firmware_state["main_firmware_version"] = simulated_version
-        
-        # Set target version when first firmware is uploaded
+
         if not firmware_state["target_version"]:
             firmware_state["target_version"] = simulated_version
-        
+
         print(f"📊 Updated Firmware State: main_pending={firmware_state['main_firmware_pending']}, rear_pending={firmware_state['rear_firmware_pending']}, target_version={firmware_state['target_version']}")
-        
-        # Simulate processing time
+
         await asyncio.sleep(2)
-        
+
         return {"status": "success", "message": f"Main firmware uploaded successfully (version: {simulated_version})"}
     except Exception as e:
         print(f"❌ Error uploading main firmware: {e}")
         raise HTTPException(status_code=500, detail="Firmware upload failed")
+
 
 @app.post("/api/v2/device/firmware_rear")
 async def upload_rear_firmware(request: Request, version: str = Query(default=None)):
@@ -243,90 +364,79 @@ async def upload_rear_firmware(request: Request, version: str = Query(default=No
     try:
         firmware_data = await request.body()
         firmware_size = len(firmware_data)
-        
-        # Simple version detection with debugging
+
         print(f"🔍 REAR: Query params: {dict(request.query_params)}")
         print(f"🔍 REAR: All headers: {dict(request.headers)}")
-        
-        # Get version (simplified - try multiple sources)
+
         simulated_version = (
-            version or  # Query parameter
-            request.headers.get("x-firmware-version") or 
+            version or
+            request.headers.get("x-firmware-version") or
             request.headers.get("firmware-version") or
-            firmware_state.get("target_version") or  # Use same version as main
-            "1.6.3"  # Default to expected version
+            firmware_state.get("target_version") or
+            "1.6.3"
         )
-        
+
         print(f"✅ Received rear firmware: {firmware_size:,} bytes (version: {simulated_version})")
         firmware_state["rear_firmware_size"] = firmware_size
         firmware_state["rear_firmware_pending"] = True
         firmware_state["rear_firmware_version"] = simulated_version
-        
-        # Set target version when first firmware is uploaded
+
         if not firmware_state["target_version"]:
             firmware_state["target_version"] = simulated_version
-        
+
         print(f"📊 Updated Firmware State: main_pending={firmware_state['main_firmware_pending']}, rear_pending={firmware_state['rear_firmware_pending']}, target_version={firmware_state['target_version']}")
-        
-        # Simulate processing time
+
         await asyncio.sleep(2)
-        
+
         return {"status": "success", "message": f"Rear firmware uploaded successfully (version: {simulated_version})"}
     except Exception as e:
         print(f"❌ Error uploading rear firmware: {e}")
         raise HTTPException(status_code=500, detail="Firmware upload failed")
 
+
 @app.post("/api/v2/device/reboot")
 async def reboot_board(request: Request):
-    """Reboot main or rear board - EMULATED with realistic delays"""
+    """Reboot main or rear board — emulated with realistic delays"""
     try:
         board = (await request.body()).decode().strip()
-        
+
         if board not in ["main", "rear"]:
             raise HTTPException(status_code=400, detail="Invalid board name. Use 'main' or 'rear'")
-        
+
         print(f"🔄 Emulating {board} board reboot...")
-        
-        # Set rebooting state for this specific board
+
         reboot_key = f"{board}_rebooting"
         firmware_state[reboot_key] = True
-        
-        # Emulate reboot process in background
+
         async def emulated_reboot():
-            # Realistic reboot delay for emulation
             await asyncio.sleep(2)
-            
-            # Apply firmware for the rebooted board
+
             if board == "main" and firmware_state["main_firmware_pending"]:
                 firmware_state["main_firmware_pending"] = False
                 print(f"✅ Main firmware applied! ({firmware_state['main_firmware_size']:,} bytes)")
-                
             elif board == "rear" and firmware_state["rear_firmware_pending"]:
                 firmware_state["rear_firmware_pending"] = False
                 print(f"✅ Rear firmware applied! ({firmware_state['rear_firmware_size']:,} bytes)")
-            
-            # Check if both firmwares have been applied and update version
+
             if not firmware_state["main_firmware_pending"] and not firmware_state["rear_firmware_pending"] and \
                firmware_state["main_firmware_size"] > 0 and firmware_state["rear_firmware_size"] > 0:
                 target_version = firmware_state["target_version"] or "0.1.5"
                 charger_state["firmwareVersion"] = target_version
                 print(f"🎉 Firmware update complete! Version: {target_version}")
-            
-            # Clear rebooting state
+
             firmware_state[reboot_key] = False
             print(f"✅ {board.capitalize()} board reboot complete")
             print(f"📊 Firmware State: main_pending={firmware_state['main_firmware_pending']}, rear_pending={firmware_state['rear_firmware_pending']}, version={charger_state['firmwareVersion']}")
-        
-        # Start emulated reboot in background (non-blocking)
+
         asyncio.create_task(emulated_reboot())
-        
         return {"status": "rebooting"}
-        
+
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="Invalid request body format")
     except Exception as e:
         print(f"❌ Error during reboot: {e}")
         raise HTTPException(status_code=500, detail="Reboot failed")
+
 
 @app.get("/api/v2/device/firmware_state")
 def get_firmware_state():
@@ -344,6 +454,7 @@ def get_firmware_state():
         "rear_rebooting": firmware_state["rear_rebooting"]
     }
 
+
 @app.post("/api/v2/device/set_firmware_version")
 async def set_firmware_version(request: Request):
     """Manually set firmware version for testing"""
@@ -356,6 +467,7 @@ async def set_firmware_version(request: Request):
     except Exception as e:
         print(f"❌ Error setting firmware version: {e}")
         raise HTTPException(status_code=400, detail="Invalid request")
+
 
 @app.post("/api/v2/device/set_target_version")
 async def set_target_version(request: Request):
@@ -370,49 +482,42 @@ async def set_target_version(request: Request):
         print(f"❌ Error setting target version: {e}")
         raise HTTPException(status_code=400, detail="Invalid request")
 
+
 @app.post("/api/v2/charger/set_charge/{slot}")
 async def set_charge_percentage(slot: int, request: Request):
     """Manually set charge percentage for a specific slot"""
     try:
         data = await request.json()
         percentage = float(data.get("percentage", 0.0))
-        
-        # Validate slot number
+
         if slot < 0 or slot >= 48:
             raise HTTPException(status_code=400, detail="Invalid slot number")
-        
-        # Validate percentage
         if percentage < 0 or percentage > 100:
             raise HTTPException(status_code=400, detail="Percentage must be between 0 and 100")
-        
+
         battery = charger_state["batteries"][slot]
-        
-        # Update the battery charge percentage
         battery["stateOfChargePercent"] = percentage
-        
-        # Calculate remaining time based on charge percentage
-        # Charging goes from 5% to 100% (95% total) in 7200 seconds (2 hours)
-        # Formula: remaining_time = (100 - current_percentage) / 95 * 7200
+
         if battery["slotState"] == "charging" and percentage < 100:
             remaining_charge_needed = max(0, 100.0 - percentage)
-            total_charge_range = 95.0  # From 5% to 100%
-            total_time_for_full_charge = 7200  # 2 hours in seconds
-            
+            total_charge_range = 95.0
+            total_time_for_full_charge = 7200
             battery["timeRemainingSeconds"] = int((remaining_charge_needed / total_charge_range) * total_time_for_full_charge)
         elif percentage >= 100:
             battery["slotState"] = "done"
             battery["timeRemainingSeconds"] = 0
         elif battery["slotState"] == "empty":
             battery["timeRemainingSeconds"] = 0
-            
+
         print(f"🔋 Set slot {slot} charge to: {percentage}% (remaining: {battery['timeRemainingSeconds']}s)")
-        
-        return {"status": "success", "slot": slot, "percentage": percentage, "timeRemaining": battery["timeRemainingSeconds"]}
+        notify_state_change()
+        return {"status": "success", "index": slot, "percentage": percentage, "timeRemaining": battery["timeRemainingSeconds"]}
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid percentage value")
     except Exception as e:
         print(f"❌ Error setting charge percentage: {e}")
         raise HTTPException(status_code=500, detail="Failed to set charge percentage")
+
 
 @app.get("/", response_class=HTMLResponse)
 def ui():
@@ -420,31 +525,51 @@ def ui():
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Charging simulation
+
+# Charging simulation — runs in a background thread
 def loop():
+    loop_event_loop = None
+
+    def get_event_loop():
+        nonlocal loop_event_loop
+        if loop_event_loop is None:
+            try:
+                loop_event_loop = asyncio.get_event_loop()
+            except RuntimeError:
+                pass
+        return loop_event_loop
+
     while True:
+        changed = False
         for b in charger_state["batteries"]:
+            if b["slotState"] in ("cold", "warm"):
+                # Temperature-paused states — do not increment charge
+                continue
             if b["slotState"] == "charging":
-                # Realistic charging: 95% in 2 hours = 0.0132% per second
-                # For simulation speed, use 0.0264% every 2 seconds (still 95% in 2 hours)
-                charge_increment = 0.0264  # This ensures 95% charge takes exactly 7200 seconds
-                b["stateOfChargePercent"] = min(100.0, b["stateOfChargePercent"] + charge_increment)
-                
-                # Decrease remaining time by 2 seconds each loop
+                # 95% in 2 hours = 0.0264% every 2 seconds
+                b["stateOfChargePercent"] = min(100.0, b["stateOfChargePercent"] + 0.0264)
                 b["timeRemainingSeconds"] = max(0, b["timeRemainingSeconds"] - 2)
-                
                 if b["stateOfChargePercent"] >= 100.0:
                     b["slotState"] = "done"
                     b["timeRemainingSeconds"] = 0
+                changed = True
+
+        if changed:
+            ev = get_event_loop()
+            if ev is not None:
+                try:
+                    asyncio.run_coroutine_threadsafe(ws_broadcast(), ev)
+                except Exception:
+                    pass
+
         time.sleep(2)
+
 
 def bonjour():
     z = Zeroconf()
-    # Generate MAC-like identifier for this emulator instance (based on port)
-    # Format: klvrXXXXXXXXXXXX (simulating MAC address pattern)
-    simulated_mac = f"0080e1{runtime_port:06x}"  # Use port to create unique MAC-like ID
+    simulated_mac = f"0080e1{runtime_port:06x}"
     service_name = f"klvr{simulated_mac}"
-    
+
     info = ServiceInfo(
         type_="_klvrcharger._tcp.local.",
         name=f"{service_name}._klvrcharger._tcp.local.",
@@ -457,6 +582,7 @@ def bonjour():
     atexit.register(lambda: z.unregister_service(info))
     print(f"✅ Emulator running at http://{host_ip}:{runtime_port}")
     print(f"🔗 Bonjour service registered as: {service_name}")
+
 
 # Start background threads
 threading.Thread(target=loop, daemon=True).start()
