@@ -1,428 +1,867 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Charger Pro Emulator</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KLVR Charger Pro Emulator</title>
   <link href="https://cdn.jsdelivr.net/npm/@fontsource/inter@latest/index.css" rel="stylesheet">
   <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
     body {
       font-family: 'Inter', sans-serif;
-      background: #f8fafc;
+      background: #f1f5f9;
       margin: 0;
-      padding: 20px;
       color: #1e293b;
+      font-size: 13px;
+      line-height: 1.4;
     }
+
+    .app {
+      max-width: 1680px;
+      margin: 0 auto;
+      padding: 16px 20px 40px;
+    }
+
+    /* ---- Header ---- */
     header {
       display: flex;
       align-items: center;
       gap: 12px;
-      margin-bottom: 24px;
+      margin-bottom: 16px;
     }
-    header img {
-      height: 40px;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(24, 1fr); /* 24 slots per row */
-      grid-template-rows: repeat(2, 1fr); /* Always 2 rows */
-      gap: 8px;
-      margin-bottom: 32px;
-      height: 100%; /* Ensure the grid scales properly */
-    }
-    .slot {
-      background: white;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
-      padding: 10px;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      text-align: center;
-      font-size: 12px; /* Set a smaller, fixed font size */
-    }
-    .slot h4 {
-      margin: 0 0 6px 0;
-      font-weight: 600;
-    }
-    .slot button {
-      display: block;
-      width: 100%;
-      margin-top: 6px;
-      padding: 6px;
-      font-size: 13px;
-      border-radius: 6px;
-      border: none;
-      background: #e2e8f0;
-      cursor: pointer;
-    }
-    .slot button:hover {
-      background: #cbd5e1;
-    }
-    .charge-input {
-      width: 50px;
-      padding: 2px 4px;
-      border: 1px solid #e2e8f0;
-      border-radius: 3px;
+    header img { height: 34px; }
+    header h1 { font-size: 18px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+    .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+    /* ---- Chips ---- */
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border-radius: 20px;
       font-size: 11px;
-      text-align: center;
-      transition: border-color 0.2s ease;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: #e2e8f0;
+      color: #64748b;
     }
-    .charge-input:focus {
-      outline: none;
-      border-color: #3b82f6;
-      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-    }
-    .charge-input[data-editing="true"] {
-      border-color: #10b981;
-      background-color: #f0fdf4;
-    }
-    pre {
-      background: #f1f5f9;
-      padding: 12px;
-      border-radius: 6px;
-      font-size: 12px;
-      overflow-x: auto;
-    }
-    .firmware-testing {
+    .chip.ok       { background: #dcfce7; color: #166534; }
+    .chip.rebooting{ background: #fef9c3; color: #854d0e; }
+    .chip.offline  { background: #fee2e2; color: #991b1b; }
+    .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+    /* ---- Cards ---- */
+    .card {
       background: white;
       border: 1px solid #e2e8f0;
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 24px;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+      border-radius: 10px;
+      padding: 14px 16px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
     }
-    .firmware-testing h3 {
-      margin: 0 0 16px 0;
-      color: #1e293b;
+    .card-title {
+      font-size: 12px;
       font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #94a3b8;
+      margin: 0 0 12px;
     }
-    .firmware-controls {
-      display: flex;
+
+    /* ---- Two-column layout ---- */
+    .row2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
       gap: 12px;
+      margin-bottom: 12px;
+    }
+    @media (max-width: 800px) { .row2 { grid-template-columns: 1fr; } }
+
+    /* ---- Device info grid ---- */
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 10px 16px;
+      margin-bottom: 12px;
+    }
+    .info-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 2px; }
+    .info-value { font-size: 13px; font-weight: 600; font-family: monospace; color: #1e293b; }
+
+    hr.divider { border: none; border-top: 1px solid #f1f5f9; margin: 10px 0; }
+
+    /* ---- Firmware OTA panel ---- */
+    .ota-boards {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .ota-board {
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      background: #f8fafc;
+    }
+    .ota-board-name { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; margin-bottom: 6px; }
+    .ota-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    .ota-idle     { background: #f1f5f9; color: #64748b; }
+    .ota-pending  { background: #fef9c3; color: #92400e; }
+    .ota-rebooting{ background: #dbeafe; color: #1d4ed8; }
+    .ota-applied  { background: #dcfce7; color: #166534; }
+    .ota-version  { font-size: 10px; color: #94a3b8; margin-top: 4px; font-family: monospace; }
+
+    /* ---- Control rows ---- */
+    .ctrl-row {
+      display: flex;
+      gap: 8px;
       align-items: center;
       flex-wrap: wrap;
     }
-    .firmware-controls input {
-      padding: 8px 12px;
-      border: 1px solid #e2e8f0;
-      border-radius: 6px;
-      font-size: 14px;
-      font-family: 'Inter', sans-serif;
-      transition: border-color 0.2s ease;
-    }
-    .firmware-controls input:focus {
-      outline: none;
-      border-color: #3b82f6;
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-    }
-    .firmware-controls input[data-editing="true"] {
-      border-color: #10b981;
-      background-color: #f0fdf4;
-    }
-    .firmware-controls button {
-      padding: 8px 16px;
-      background: #3b82f6;
-      color: white;
+    .ctrl-label { font-size: 12px; color: #64748b; white-space: nowrap; }
+
+    /* ---- Buttons ---- */
+    button {
+      font-family: inherit;
+      font-weight: 500;
       border: none;
       border-radius: 6px;
-      font-size: 14px;
-      font-weight: 500;
       cursor: pointer;
-      font-family: 'Inter', sans-serif;
+      transition: filter 0.1s, transform 0.08s;
+      white-space: nowrap;
     }
-    .firmware-controls button:hover {
-      background: #2563eb;
-    }
-    .firmware-controls button[style*="background: #10b981"]:hover {
-      background: #059669 !important;
-    }
-    .firmware-controls button[style*="background: #ef4444"]:hover {
-      background: #dc2626 !important;
-    }
-    .device-info {
-      background: #f8fafc;
+    button:active { transform: scale(0.96); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    .btn-lg   { font-size: 13px; padding: 8px 14px; }
+    .btn-md   { font-size: 12px; padding: 6px 12px; }
+    .btn-sm   { font-size: 11px; padding: 4px 9px; border-radius: 5px; }
+    .btn-xs   { font-size: 10px; padding: 3px 7px; border-radius: 4px; }
+
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+    .btn-success { background: #22c55e; color: white; }
+    .btn-success:hover:not(:disabled) { filter: brightness(1.08); }
+    .btn-danger  { background: #ef4444; color: white; }
+    .btn-danger:hover:not(:disabled)  { filter: brightness(1.1); }
+    .btn-ghost   { background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; }
+    .btn-ghost:hover:not(:disabled)   { background: #e2e8f0; }
+    .btn-cold    { background: #e0f2fe; color: #0369a1; }
+    .btn-cold:hover:not(:disabled)    { background: #bae6fd; }
+    .btn-warm    { background: #ffedd5; color: #c2410c; }
+    .btn-warm:hover:not(:disabled)    { background: #fed7aa; }
+
+    /* ---- Inputs ---- */
+    input[type="text"],
+    input[type="number"],
+    select {
+      font-family: inherit;
+      font-size: 12px;
+      padding: 6px 10px;
       border: 1px solid #e2e8f0;
       border-radius: 6px;
-      padding: 12px;
-      margin: 16px 0;
-      font-size: 14px;
-      font-family: monospace;
+      outline: none;
+      background: white;
+      color: #1e293b;
+      transition: border-color 0.15s, box-shadow 0.15s;
     }
-</style>
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    select:focus {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+    }
+    input[data-editing="true"] {
+      border-color: #22c55e;
+      background: #f0fdf4;
+    }
+
+    /* ---- Grid section header ---- */
+    .section-header {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin: 16px 0 10px;
+    }
+    .section-header h2 { font-size: 15px; font-weight: 700; margin: 0; }
+    .section-sub { font-size: 12px; color: #94a3b8; font-weight: 400; }
+
+    /* ---- Legend ---- */
+    .legend {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-left: auto;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: #64748b;
+    }
+    .legend-swatch {
+      width: 11px;
+      height: 11px;
+      border-radius: 3px;
+    }
+
+    /* ---- Battery grid ---- */
+    .battery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 7px;
+    }
+
+    /* ---- Slot card ---- */
+    .slot-card {
+      background: white;
+      border: 1.5px solid #e2e8f0;
+      border-left-width: 4px;
+      border-radius: 8px;
+      padding: 9px 9px 7px;
+      transition: box-shadow 0.15s;
+      min-width: 0;
+    }
+    .slot-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.09); }
+
+    .slot-card[data-state="empty"]    { border-left-color: #cbd5e1; }
+    .slot-card[data-state="charging"] { border-left-color: #3b82f6; }
+    .slot-card[data-state="done"]     { border-left-color: #22c55e; background: #fafffe; }
+    .slot-card[data-state="error"]    { border-left-color: #ef4444; background: #fffafa; }
+    .slot-card[data-state="cold"]     { border-left-color: #0ea5e9; background: #f8fdff; }
+    .slot-card[data-state="warm"]     { border-left-color: #f97316; background: #fffcf8; }
+
+    .slot-header {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 6px;
+    }
+    .slot-num {
+      font-size: 11px;
+      font-weight: 700;
+      color: #94a3b8;
+      min-width: 22px;
+    }
+    .state-badge {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .badge-empty    { background: #f1f5f9; color: #94a3b8; }
+    .badge-charging { background: #dbeafe; color: #1d4ed8; }
+    .badge-done     { background: #dcfce7; color: #15803d; }
+    .badge-error    { background: #fee2e2; color: #b91c1c; }
+    .badge-cold     { background: #e0f2fe; color: #0369a1; }
+    .badge-warm     { background: #ffedd5; color: #c2410c; }
+
+    .battery-type {
+      margin-left: auto;
+      font-size: 10px;
+      font-weight: 600;
+      color: #94a3b8;
+    }
+
+    /* ---- SOC ---- */
+    .soc-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 3px;
+    }
+    .soc-track {
+      flex: 1;
+      height: 4px;
+      background: #e2e8f0;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .soc-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.5s ease;
+      background: #cbd5e1;
+    }
+    .slot-card[data-state="charging"] .soc-fill { background: #3b82f6; }
+    .slot-card[data-state="done"]     .soc-fill { background: #22c55e; }
+    .slot-card[data-state="error"]    .soc-fill { background: #ef4444; }
+    .slot-card[data-state="cold"]     .soc-fill { background: #0ea5e9; }
+    .slot-card[data-state="warm"]     .soc-fill { background: #f97316; }
+
+    .soc-input {
+      width: 44px;
+      padding: 2px 4px;
+      font-size: 10px;
+      text-align: right;
+      border-radius: 3px;
+      border: 1px solid #e2e8f0;
+    }
+    .soc-pct { font-size: 10px; color: #94a3b8; }
+
+    /* ---- Time & error msg ---- */
+    .slot-meta {
+      font-size: 10px;
+      color: #94a3b8;
+      margin-bottom: 6px;
+      min-height: 13px;
+    }
+    .slot-meta.has-time { color: #64748b; }
+    .slot-errmsg {
+      font-size: 10px;
+      font-weight: 600;
+      color: #ef4444;
+      margin-bottom: 4px;
+    }
+
+    /* ---- Slot actions ---- */
+    .slot-actions { display: flex; gap: 3px; flex-wrap: wrap; }
+    .slot-fault-row {
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px solid #f1f5f9;
+    }
+    .fault-select {
+      flex: 1;
+      min-width: 0;
+      font-size: 10px;
+      padding: 3px 4px;
+      border-radius: 4px;
+    }
+
+    /* ---- Toast ---- */
+    #toasts {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 9999;
+      pointer-events: none;
+    }
+    .toast {
+      padding: 9px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      color: white;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+      animation: toastIn 0.2s ease;
+    }
+    .toast.success { background: #22c55e; }
+    .toast.error   { background: #ef4444; }
+    .toast.info    { background: #3b82f6; }
+    .toast.warn    { background: #f59e0b; }
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateX(16px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    /* ---- JSON toggle ---- */
+    .json-section { margin-top: 16px; }
+    .json-toggle {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      cursor: pointer;
+      user-select: none;
+      padding: 8px 4px;
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: 600;
+      border-top: 1px solid #e2e8f0;
+    }
+    .json-toggle:hover { color: #64748b; }
+    .json-arrow { transition: transform 0.2s; font-size: 10px; }
+    .json-toggle.open .json-arrow { transform: rotate(90deg); }
+    #json-body { display: none; }
+    #json-body.open { display: block; }
+    pre#status {
+      background: #0f172a;
+      color: #7dd3fc;
+      padding: 14px;
+      border-radius: 8px;
+      font-size: 11px;
+      overflow-x: auto;
+      margin: 0;
+      line-height: 1.6;
+    }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  </style>
 </head>
 <body>
+<div class="app">
+
+  <!-- ── Header ── -->
   <header>
-    <img src="/static/klvr-logo.png" alt="KLVR Logo">
+    <img src="/static/klvr-logo.png" alt="KLVR">
     <h1>Charger Pro Emulator</h1>
+    <div class="header-right">
+      <div class="chip" id="statusChip"><span class="chip-dot"></span><span id="statusText">connecting…</span></div>
+    </div>
   </header>
 
-  <div class="firmware-testing">
-    <h3>🔧 Firmware Testing</h3>
-    <div class="device-info" id="deviceInfo">Loading device info...</div>
-    <div class="firmware-controls">
-      <label for="firmwareVersion">Manual Firmware Version:</label>
-      <input type="text" id="firmwareVersion" placeholder="e.g. 0.1.5" value="0.1.0">
-      <button onclick="setFirmwareVersion()">Set Version</button>
-      <button onclick="resetFirmware()">Reset to 1.5.0</button>
+  <!-- ── Device + Battery controls ── -->
+  <div class="row2">
+
+    <!-- Device info -->
+    <div class="card">
+      <div class="card-title">Device</div>
+      <div class="info-grid">
+        <div><div class="info-label">Name</div><div class="info-value" id="info-name">—</div></div>
+        <div><div class="info-label">Firmware</div><div class="info-value" id="info-fw">—</div></div>
+        <div><div class="info-label">IP</div><div class="info-value" id="info-ip">—</div></div>
+        <div><div class="info-label">Status</div><div class="info-value" id="info-status">—</div></div>
+      </div>
+      <hr class="divider">
+      <div class="ctrl-row">
+        <span class="ctrl-label">Firmware:</span>
+        <input type="text" id="firmwareVersion" style="width:100px" placeholder="e.g. 0.1.5">
+        <button class="btn-md btn-primary" onclick="setFirmwareVersion()">Set</button>
+        <button class="btn-md btn-ghost" onclick="resetFirmware()">Reset to 1.5.0</button>
+      </div>
     </div>
-    <div class="firmware-controls" style="margin-top: 12px; border-top: 1px solid #e2e8f0; padding-top: 12px;">
-      <label><strong>Battery Testing:</strong></label>
-      <button onclick="bulkInsertBatteries()" style="background: #10b981;">🔋 Insert 37 Random Batteries</button>
-      <button onclick="clearAllBatteries()" style="background: #ef4444;">🗑️ Clear All Batteries</button>
+
+    <!-- Battery bulk controls -->
+    <div class="card">
+      <div class="card-title">Battery Controls</div>
+      <div class="ctrl-row" style="margin-bottom:10px">
+        <button class="btn-lg btn-success" onclick="bulkInsertBatteries()">Insert 37 Random</button>
+        <button class="btn-lg btn-danger"  onclick="clearAllBatteries()">Clear All</button>
+      </div>
+      <div style="font-size:11px;color:#94a3b8" id="batteryStats">Loading…</div>
+    </div>
+
+  </div>
+
+  <!-- ── Firmware OTA panel ── -->
+  <div class="card" style="margin-bottom:12px">
+    <div class="card-title">Firmware Update State</div>
+    <div class="ota-boards">
+      <div class="ota-board">
+        <div class="ota-board-name">Main Board</div>
+        <div id="ota-main" class="ota-badge ota-idle">Idle</div>
+        <div id="ota-main-ver" class="ota-version"></div>
+      </div>
+      <div class="ota-board">
+        <div class="ota-board-name">Rear Board</div>
+        <div id="ota-rear" class="ota-badge ota-idle">Idle</div>
+        <div id="ota-rear-ver" class="ota-version"></div>
+      </div>
+      <div class="ota-board" style="flex:0.8">
+        <div class="ota-board-name">Target Version</div>
+        <div style="font-size:13px;font-weight:700;font-family:monospace;color:#1e293b;margin-bottom:8px" id="ota-target">—</div>
+        <div class="ctrl-row">
+          <input type="text" id="targetVersion" style="width:90px;font-size:11px" placeholder="e.g. 1.6.3">
+          <button class="btn-sm btn-primary" onclick="setTargetVersion()">Set</button>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div class="grid" id="slots"></div>
+  <!-- ── Battery grid ── -->
+  <div class="section-header">
+    <h2>Slots</h2>
+    <span class="section-sub" id="slotSummary"></span>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-swatch" style="background:#f1f5f9;border:1px solid #cbd5e1"></div>Empty</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#dbeafe"></div>Charging</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#dcfce7"></div>Done</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#e0f2fe"></div>Cold</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#ffedd5"></div>Warm</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#fee2e2"></div>Error</div>
+    </div>
+  </div>
+  <div class="battery-grid" id="slots"></div>
 
-  <h2>API Response</h2>
-  <pre id="status"></pre>
+  <!-- ── Raw JSON ── -->
+  <div class="json-section">
+    <div class="json-toggle" id="jsonToggle" onclick="toggleJson()">
+      <span class="json-arrow">▶</span>
+      Raw API Response
+    </div>
+    <div id="json-body">
+      <pre id="status"></pre>
+    </div>
+  </div>
 
-  <script>
-    async function loadDeviceInfo() {
-      try {
-        const res = await fetch('/api/v2/device/info');
-        const data = await res.json();
-        document.getElementById('deviceInfo').innerHTML = `
-          <strong>Device:</strong> ${data.name}<br>
-          <strong>Firmware Version:</strong> ${data.firmwareVersion}<br>
-          <strong>Status:</strong> ${data.status}<br>
-          <strong>IP:</strong> ${data.ip.ipAddress}
-        `;
-        
-        // Only update input field if it's not currently focused/being edited
-        const firmwareInput = document.getElementById('firmwareVersion');
-        if (document.activeElement !== firmwareInput && !firmwareInput.dataset.editing) {
-          firmwareInput.value = data.firmwareVersion;
-        }
-      } catch (e) {
-        document.getElementById('deviceInfo').innerHTML = `<span style="color: red;">Error loading device info</span>`;
+</div>
+
+<div id="toasts"></div>
+
+<script>
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  function formatTime(s) {
+    if (!s || s <= 0) return '';
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m`;
+    return `<1m`;
+  }
+
+  function toast(msg, type = 'info') {
+    const el = document.createElement('div');
+    el.className = `toast ${type}`;
+    el.textContent = msg;
+    document.getElementById('toasts').appendChild(el);
+    setTimeout(() => el.remove(), 2800);
+  }
+
+  function setupInputProtection(el) {
+    if (!el) return;
+    el.addEventListener('focus', () => { el.dataset.editing = 'true'; });
+    el.addEventListener('input',  () => { el.dataset.editing = 'true'; });
+    el.addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      delete el.dataset.editing;
+      if (el.id === 'firmwareVersion') setFirmwareVersion();
+      else if (el.id === 'targetVersion') setTargetVersion();
+      else if (el.id.startsWith('soc-')) {
+        const slot = parseInt(el.id.slice(4));
+        setChargePercentage(slot);
       }
+      el.blur();
+    });
+    el.addEventListener('blur', () => {
+      if (el.id && el.id.startsWith('soc-')) {
+        // Submit SOC on blur
+        setTimeout(() => {
+          if (!el.dataset.editing) {
+            const slot = parseInt(el.id.slice(4));
+            setChargePercentage(slot);
+          }
+        }, 100);
+      }
+      setTimeout(() => { delete el.dataset.editing; }, 500);
+    });
+  }
+
+  const BADGE_CLASS = {
+    empty: 'badge-empty', charging: 'badge-charging', done: 'badge-done',
+    error: 'badge-error', cold: 'badge-cold', warm: 'badge-warm',
+  };
+
+  // ── Build slot card (first render only) ─────────────────────────────────
+
+  function buildSlotCard(b) {
+    const s = b.slot;
+    const div = document.createElement('div');
+    div.className = 'slot-card';
+    div.id = `sc-${s}`;
+    div.dataset.state = b.slotState;
+    div.dataset.slot = s;
+
+    const soc = b.stateOfChargePercent || 0;
+    const typeShort = (b.batteryDetected || '').replace('KLVR-', '');
+    const isEmpty = b.slotState === 'empty';
+    const timeStr = formatTime(b.timeRemainingSeconds);
+    const errMsg = b.errorMsg || '';
+
+    div.innerHTML = `
+      <div class="slot-header">
+        <span class="slot-num">S${s}</span>
+        <span class="state-badge ${BADGE_CLASS[b.slotState] || 'badge-empty'}" id="badge-${s}">${b.slotState}</span>
+        <span class="battery-type" id="btype-${s}">${typeShort}</span>
+      </div>
+      <div class="soc-row">
+        <div class="soc-track"><div class="soc-fill" id="socbar-${s}" style="width:${soc}%"></div></div>
+        <input type="number" class="soc-input" id="soc-${s}" value="${soc.toFixed(1)}"
+               min="0" max="100" step="0.1" ${isEmpty ? 'disabled' : ''}>
+        <span class="soc-pct">%</span>
+      </div>
+      ${errMsg ? `<div class="slot-errmsg" id="errmsg-${s}">${errMsg}</div>` : `<div class="slot-errmsg" id="errmsg-${s}" style="display:none"></div>`}
+      <div class="slot-meta ${timeStr ? 'has-time' : ''}" id="meta-${s}">${timeStr ? '⏱ ' + timeStr : '—'}</div>
+      <div class="slot-actions">
+        <button class="btn-xs btn-ghost" onclick="insert(${s},'KLVR-AA')">AA</button>
+        <button class="btn-xs btn-ghost" onclick="insert(${s},'KLVR-AAA')">AAA</button>
+        <button class="btn-xs btn-danger" onclick="eject(${s})">Eject</button>
+      </div>
+      <div class="slot-fault-row" id="fault-${s}" ${isEmpty ? 'style="display:none"' : ''}>
+        <button class="btn-xs btn-cold" onclick="setCold(${s})">Cold</button>
+        <button class="btn-xs btn-warm" onclick="setWarm(${s})">Warm</button>
+        <select class="fault-select" onchange="if(this.value){setError(${s},this.value);this.value=''}">
+          <option value="">Fault…</option>
+          <option value="overtemp">overtemp</option>
+          <option value="undertemp">undertemp</option>
+          <option value="overcurrent">overcurrent</option>
+          <option value="faulty">faulty</option>
+          <option value="detect_err">detect_err</option>
+        </select>
+      </div>
+    `;
+
+    setupInputProtection(div.querySelector(`#soc-${s}`));
+    return div;
+  }
+
+  // ── Update slot card in-place ─────────────────────────────────────────
+
+  function updateSlotCard(b) {
+    const s = b.slot;
+    const card = document.getElementById(`sc-${s}`);
+    if (!card) return;
+
+    const newState = b.slotState;
+    const isEmpty = newState === 'empty';
+
+    card.dataset.state = newState;
+
+    const badge = document.getElementById(`badge-${s}`);
+    if (badge) { badge.className = `state-badge ${BADGE_CLASS[newState] || 'badge-empty'}`; badge.textContent = newState; }
+
+    const btype = document.getElementById(`btype-${s}`);
+    if (btype) btype.textContent = (b.batteryDetected || '').replace('KLVR-', '');
+
+    const socBar = document.getElementById(`socbar-${s}`);
+    if (socBar) socBar.style.width = `${b.stateOfChargePercent || 0}%`;
+
+    const socInput = document.getElementById(`soc-${s}`);
+    if (socInput && document.activeElement !== socInput && !socInput.dataset.editing) {
+      socInput.value = (b.stateOfChargePercent || 0).toFixed(1);
+      socInput.disabled = isEmpty;
     }
 
-    async function load() {
+    const errmsg = document.getElementById(`errmsg-${s}`);
+    if (errmsg) {
+      const msg = b.errorMsg || '';
+      errmsg.textContent = msg;
+      errmsg.style.display = msg ? '' : 'none';
+    }
+
+    const meta = document.getElementById(`meta-${s}`);
+    if (meta) {
+      const t = formatTime(b.timeRemainingSeconds);
+      meta.textContent = t ? `⏱ ${t}` : '—';
+      meta.className = `slot-meta ${t ? 'has-time' : ''}`;
+    }
+
+    const fault = document.getElementById(`fault-${s}`);
+    if (fault) fault.style.display = isEmpty ? 'none' : '';
+  }
+
+  // ── Data loading ─────────────────────────────────────────────────────────
+
+  async function load() {
+    try {
       const res = await fetch('/api/v2/charger/status');
       const data = await res.json();
       const grid = document.getElementById('slots');
-      
-      // Check if this is first load or if we need to rebuild
-      const shouldRebuild = grid.children.length !== data.batteries.length;
-      
-      if (shouldRebuild) {
-        // Full rebuild only when necessary
+
+      if (grid.children.length !== data.batteries.length) {
         grid.innerHTML = '';
-        data.batteries.forEach(b => {
-          const div = document.createElement('div');
-          div.className = 'slot';
-          div.innerHTML = `
-            <h4>Slot ${b.slot}</h4>
-            <div class="slot-state">State: <span id="state-${b.slot}">${b.slotState}</span></div>
-            <div class="slot-charge">Charge: <input type="number" id="charge-${b.slot}" class="charge-input" value="${b.stateOfChargePercent.toFixed(1)}" min="0" max="100" step="0.1">%</div>
-            <div class="slot-remaining">Remaining: <span id="remaining-${b.slot}">${b.timeRemainingSeconds}</span>s</div>
-            <div class="slot-type">Type: <span id="type-${b.slot}">${b.batteryDetected || '-'}</span></div>
-            <div class="slot-buttons">
-              <button onclick="insert(${b.slot}, 'KLVR-AA')">Insert AA</button>
-              <button onclick="insert(${b.slot}, 'KLVR-AAA')">Insert AAA</button>
-              <button onclick="eject(${b.slot})">Eject</button>
-            </div>
-          `;
-          grid.appendChild(div);
-          
-          // Setup input protection for new inputs
-          const chargeInput = document.getElementById(`charge-${b.slot}`);
-          if (chargeInput) {
-            setupInputProtection(chargeInput);
-          }
-        });
+        data.batteries.forEach(b => grid.appendChild(buildSlotCard(b)));
       } else {
-        // Update existing elements without rebuilding DOM
-        data.batteries.forEach(b => {
-          // Update state
-          const stateElement = document.getElementById(`state-${b.slot}`);
-          if (stateElement) stateElement.textContent = b.slotState;
-          
-          // Update remaining time
-          const remainingElement = document.getElementById(`remaining-${b.slot}`);
-          if (remainingElement) remainingElement.textContent = b.timeRemainingSeconds;
-          
-          // Update battery type
-          const typeElement = document.getElementById(`type-${b.slot}`);
-          if (typeElement) typeElement.textContent = b.batteryDetected || '-';
-          
-          // Update charge input only if not being edited
-          const chargeInput = document.getElementById(`charge-${b.slot}`);
-          if (chargeInput && document.activeElement !== chargeInput && !chargeInput.dataset.editing) {
-            chargeInput.value = b.stateOfChargePercent.toFixed(1);
-          }
-        });
+        data.batteries.forEach(b => updateSlotCard(b));
       }
 
-      document.getElementById('status').innerText = JSON.stringify(data, null, 2);
-      await loadDeviceInfo();
-    }
+      document.getElementById('status').textContent = JSON.stringify(data, null, 2);
+      updateBatteryStats(data.batteries);
+    } catch (_) {}
 
-    async function insert(slot, type) {
-      await fetch(`/api/v2/charger/insert/${slot}?type=${type}`, { method: 'POST' });
-      load();
-    }
+    loadDeviceInfo();
+    loadFirmwareState();
+  }
 
-    async function eject(slot) {
-      await fetch(`/api/v2/charger/eject/${slot}`, { method: 'POST' });
-      load();
-    }
+  function updateBatteryStats(batteries) {
+    const occupied  = batteries.filter(b => b.slotState !== 'empty').length;
+    const charging  = batteries.filter(b => b.slotState === 'charging').length;
+    const done      = batteries.filter(b => b.slotState === 'done').length;
+    const faults    = batteries.filter(b => ['error','cold','warm'].includes(b.slotState)).length;
+    const el = document.getElementById('slotSummary');
+    if (el) el.textContent = `${occupied}/48 occupied · ${charging} charging · ${done} done${faults ? ` · ⚠ ${faults} fault${faults>1?'s':''}` : ''}`;
+    const stats = document.getElementById('batteryStats');
+    if (stats) stats.textContent = `${occupied} batteries loaded · ${48 - occupied} empty slots`;
+  }
 
-    async function setFirmwareVersion() {
-      const version = document.getElementById('firmwareVersion').value;
-      try {
-        const res = await fetch('/api/v2/device/set_firmware_version', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ version: version })
-        });
-        const data = await res.json();
-        if (data.status === 'success') {
-          await loadDeviceInfo();
-          console.log(`✅ Firmware version set to: ${data.firmwareVersion}`);
+  async function loadDeviceInfo() {
+    try {
+      const res = await fetch('/api/v2/device/info');
+      const d = await res.json();
+
+      const chip = document.getElementById('statusChip');
+      const txt  = document.getElementById('statusText');
+      const isRebooting = d.status.includes('rebooting');
+      chip.className = `chip ${isRebooting ? 'rebooting' : 'ok'}`;
+      txt.textContent = d.status;
+
+      document.getElementById('info-name').textContent   = d.name;
+      document.getElementById('info-fw').textContent     = d.firmwareVersion;
+      document.getElementById('info-ip').textContent     = d.ip?.ipAddress || '—';
+      document.getElementById('info-status').textContent = d.status;
+
+      const fwInput = document.getElementById('firmwareVersion');
+      if (fwInput && document.activeElement !== fwInput && !fwInput.dataset.editing) {
+        fwInput.value = d.firmwareVersion;
+      }
+    } catch (_) {
+      const chip = document.getElementById('statusChip');
+      chip.className = 'chip offline';
+      document.getElementById('statusText').textContent = 'offline';
+    }
+  }
+
+  async function loadFirmwareState() {
+    try {
+      const res = await fetch('/api/v2/device/firmware_state');
+      const d = await res.json();
+
+      document.getElementById('ota-target').textContent = d.target_version || '—';
+      const tvInput = document.getElementById('targetVersion');
+      if (tvInput && document.activeElement !== tvInput && !tvInput.dataset.editing && d.target_version) {
+        tvInput.value = d.target_version;
+      }
+
+      function updateBoard(elId, verElId, pending, rebooting, size, version) {
+        const el = document.getElementById(elId);
+        const verEl = document.getElementById(verElId);
+        if (rebooting) {
+          el.className = 'ota-badge ota-rebooting'; el.textContent = 'Rebooting…';
+        } else if (pending) {
+          el.className = 'ota-badge ota-pending';
+          el.textContent = `Pending · ${(size/1024).toFixed(0)} kB`;
+        } else if (size > 0) {
+          el.className = 'ota-badge ota-applied'; el.textContent = 'Applied';
+        } else {
+          el.className = 'ota-badge ota-idle'; el.textContent = 'Idle';
         }
-      } catch (e) {
-        console.error('❌ Error setting firmware version:', e);
+        if (verEl) verEl.textContent = version ? `v${version}` : '';
       }
-    }
 
-    async function resetFirmware() {
-      document.getElementById('firmwareVersion').value = '1.5.0';
-      await setFirmwareVersion();
-    }
+      updateBoard('ota-main', 'ota-main-ver',
+        d.main_firmware_pending, d.main_rebooting, d.main_firmware_size, d.main_firmware_version);
+      updateBoard('ota-rear', 'ota-rear-ver',
+        d.rear_firmware_pending, d.rear_rebooting, d.rear_firmware_size, d.rear_firmware_version);
+    } catch (_) {}
+  }
 
-    async function bulkInsertBatteries() {
-      try {
-        console.log('🔋 Starting bulk battery insertion...');
-        const res = await fetch('/api/v2/charger/bulk_insert', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        const data = await res.json();
-        if (data.ok) {
-          console.log(`✅ Successfully inserted ${data.summary.total} batteries:`);
-          console.log(`   - ${data.summary.aa_count} AA batteries`);
-          console.log(`   - ${data.summary.aaa_count} AAA batteries`);
-          console.log(`   - ${data.summary.full_batteries} full batteries (100%)`);
-          console.log(`   - Average SOC: ${data.summary.avg_soc}%`);
-          await load(); // Refresh the UI
-        }
-      } catch (e) {
-        console.error('❌ Error inserting batteries:', e);
-      }
-    }
+  // ── Slot actions ─────────────────────────────────────────────────────────
 
-    async function clearAllBatteries() {
-      try {
-        console.log('🗑️ Clearing all batteries...');
-        // Eject all batteries by calling eject for each slot
-        const promises = [];
-        for (let slot = 0; slot < 48; slot++) {
-          promises.push(fetch(`/api/v2/charger/eject/${slot}`, { method: 'POST' }));
-        }
-        await Promise.all(promises);
-        console.log('✅ All batteries cleared');
-        await load(); // Refresh the UI
-      } catch (e) {
-        console.error('❌ Error clearing batteries:', e);
-      }
-    }
-
-    async function setChargePercentage(slot) {
-      const input = document.getElementById(`charge-${slot}`);
-      const percentage = parseFloat(input.value);
-      
-      if (isNaN(percentage) || percentage < 0 || percentage > 100) {
-        console.error(`❌ Invalid percentage: ${input.value}`);
-        return;
-      }
-      
-      try {
-        const res = await fetch(`/api/v2/charger/set_charge/${slot}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ percentage: percentage })
-        });
-        const data = await res.json();
-        if (data.status === 'success') {
-          console.log(`✅ Set slot ${slot} charge to: ${percentage}%`);
-        }
-      } catch (e) {
-        console.error(`❌ Error setting charge for slot ${slot}:`, e);
-      }
-    }
-
-    // Function to setup input protection for any input field
-    function setupInputProtection(inputElement) {
-      let enterPressed = false;
-      
-      // Mark as editing when user focuses the input
-      inputElement.addEventListener('focus', function() {
-        this.dataset.editing = 'true';
-      });
-      
-      // Mark as editing when user starts typing
-      inputElement.addEventListener('input', function() {
-        this.dataset.editing = 'true';
-      });
-      
-      // Handle Enter key press
-      inputElement.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') {
-          e.preventDefault(); // Prevent default form submission
-          enterPressed = true;
-          delete this.dataset.editing;
-          
-          // Trigger specific action based on input type
-          if (inputElement.id === 'firmwareVersion') {
-            setFirmwareVersion();
-          } else if (inputElement.id.startsWith('charge-')) {
-            const slot = parseInt(inputElement.id.replace('charge-', ''));
-            console.log(`🎯 Enter pressed - updating slot ${slot} charge to: ${inputElement.value}%`);
-            setChargePercentage(slot);
-          }
-          
-          // Blur the input to remove focus
-          this.blur();
-          
-          // Reset flag after a short delay
-          setTimeout(() => {
-            enterPressed = false;
-          }, 200);
-        }
-      });
-      
-      // Stop editing state after a delay when focus is lost
-      inputElement.addEventListener('blur', function() {
-        setTimeout(() => {
-          delete this.dataset.editing;
-        }, 500); // 500ms delay to allow for quick refocus
-      });
-      
-      // For charge inputs, also trigger update when focus is lost (but not if Enter was pressed)
-      if (inputElement.id && inputElement.id.startsWith('charge-')) {
-        inputElement.addEventListener('blur', function() {
-          if (!enterPressed) {
-            setTimeout(() => {
-              const slot = parseInt(inputElement.id.replace('charge-', ''));
-              console.log(`🎯 Blur event - updating slot ${slot} charge to: ${inputElement.value}%`);
-              setChargePercentage(slot);
-            }, 100);
-          }
-        });
-      }
-    }
-
-    // Add event listeners to track input editing state
-    document.addEventListener('DOMContentLoaded', function() {
-      const firmwareInput = document.getElementById('firmwareVersion');
-      setupInputProtection(firmwareInput);
-    });
-
-    setInterval(load, 2000);
+  async function insert(slot, type) {
+    await fetch(`/api/v2/charger/insert/${slot}?type=${type}`, { method: 'POST' });
+    toast(`S${slot}: ${type} inserted`, 'success');
     load();
-  </script>
+  }
+
+  async function eject(slot) {
+    await fetch(`/api/v2/charger/eject/${slot}`, { method: 'POST' });
+    toast(`S${slot}: ejected`, 'info');
+    load();
+  }
+
+  async function setCold(slot) {
+    await fetch(`/api/v2/charger/set_cold/${slot}`, { method: 'POST' });
+    toast(`S${slot}: cold`, 'warn');
+    load();
+  }
+
+  async function setWarm(slot) {
+    await fetch(`/api/v2/charger/set_warm/${slot}`, { method: 'POST' });
+    toast(`S${slot}: warm`, 'warn');
+    load();
+  }
+
+  async function setError(slot, type) {
+    await fetch(`/api/v2/charger/set_error/${slot}?type=${type}`, { method: 'POST' });
+    toast(`S${slot}: ${type}`, 'error');
+    load();
+  }
+
+  async function setChargePercentage(slot) {
+    const input = document.getElementById(`soc-${slot}`);
+    const pct = parseFloat(input.value);
+    if (isNaN(pct) || pct < 0 || pct > 100) return;
+    await fetch(`/api/v2/charger/set_charge/${slot}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ percentage: pct })
+    });
+    load();
+  }
+
+  // ── Device / firmware actions ────────────────────────────────────────────
+
+  async function setFirmwareVersion() {
+    const v = document.getElementById('firmwareVersion').value.trim();
+    if (!v) return;
+    const res = await fetch('/api/v2/device/set_firmware_version', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: v })
+    });
+    const d = await res.json();
+    if (d.status === 'success') { toast(`Firmware → ${d.firmwareVersion}`, 'success'); loadDeviceInfo(); }
+  }
+
+  async function resetFirmware() {
+    document.getElementById('firmwareVersion').value = '1.5.0';
+    await setFirmwareVersion();
+  }
+
+  async function setTargetVersion() {
+    const v = document.getElementById('targetVersion').value.trim();
+    if (!v) return;
+    const res = await fetch('/api/v2/device/set_target_version', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: v })
+    });
+    const d = await res.json();
+    if (d.status === 'success') { toast(`Target → ${d.targetVersion}`, 'info'); loadFirmwareState(); }
+  }
+
+  async function bulkInsertBatteries() {
+    const res = await fetch('/api/v2/charger/bulk_insert', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }
+    });
+    const d = await res.json();
+    if (d.ok) {
+      toast(`Inserted ${d.summary.total} batteries (${d.summary.full_batteries} full, avg ${d.summary.avg_soc}%)`, 'success');
+      load();
+    }
+  }
+
+  async function clearAllBatteries() {
+    const res = await fetch('/api/v2/charger/bulk_clear', { method: 'POST' });
+    if (res.ok) { toast('All slots cleared', 'info'); load(); }
+  }
+
+  // ── JSON panel ───────────────────────────────────────────────────────────
+
+  function toggleJson() {
+    document.getElementById('jsonToggle').classList.toggle('open');
+    document.getElementById('json-body').classList.toggle('open');
+  }
+
+  // ── Init ─────────────────────────────────────────────────────────────────
+
+  document.addEventListener('DOMContentLoaded', () => {
+    setupInputProtection(document.getElementById('firmwareVersion'));
+    setupInputProtection(document.getElementById('targetVersion'));
+  });
+
+  setInterval(load, 2000);
+  load();
+</script>
 </body>
 </html>

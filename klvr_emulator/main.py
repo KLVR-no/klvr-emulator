@@ -190,7 +190,7 @@ def get_firmware_version():
 
 
 @app.post("/api/v2/charger/insert/{slot}")
-def insert(slot: int, type: str = Query(...)):
+async def insert(slot: int, type: str = Query(...)):
     b = charger_state["batteries"][slot]
     # Recovery: cold/warm batteries transition back to charging on re-insert
     b["slotState"] = "charging"
@@ -203,7 +203,7 @@ def insert(slot: int, type: str = Query(...)):
 
 
 @app.post("/api/v2/charger/eject/{slot}")
-def eject(slot: int):
+async def eject(slot: int):
     b = charger_state["batteries"][slot]
     b["slotState"] = "empty"
     b["stateOfChargePercent"] = 0.0
@@ -215,7 +215,7 @@ def eject(slot: int):
 
 
 @app.post("/api/v2/charger/bulk_insert")
-def bulk_insert():
+async def bulk_insert():
     """Insert 37 batteries with random types (AA/AAA) and SOC levels, always including 4-5 full batteries"""
     import random
 
@@ -282,7 +282,7 @@ def bulk_insert():
 
 
 @app.post("/api/v2/charger/set_cold/{slot}")
-def set_cold(slot: int):
+async def set_cold(slot: int):
     """Set a slot to cold state (BATTERY_STATE_TEMP_COLD)."""
     if slot < 0 or slot >= 48:
         raise HTTPException(status_code=400, detail="Invalid slot number")
@@ -294,7 +294,7 @@ def set_cold(slot: int):
 
 
 @app.post("/api/v2/charger/set_warm/{slot}")
-def set_warm(slot: int):
+async def set_warm(slot: int):
     """Set a slot to warm state (BATTERY_STATE_TEMP_WARM)."""
     if slot < 0 or slot >= 48:
         raise HTTPException(status_code=400, detail="Invalid slot number")
@@ -305,10 +305,23 @@ def set_warm(slot: int):
     return {"ok": True}
 
 
+@app.post("/api/v2/charger/bulk_clear")
+async def bulk_clear():
+    """Eject all batteries at once."""
+    for b in charger_state["batteries"]:
+        b["slotState"] = "empty"
+        b["stateOfChargePercent"] = 0.0
+        b["timeRemainingSeconds"] = 0
+        b["batteryDetected"] = ""
+        b["errorMsg"] = ""
+    notify_state_change()
+    return {"ok": True}
+
+
 VALID_ERROR_TYPES = {"overtemp", "undertemp", "overcurrent", "faulty", "detect_err"}
 
 @app.post("/api/v2/charger/set_error/{slot}")
-def set_error(slot: int, type: str = Query(...)):
+async def set_error(slot: int, type: str = Query(...)):
     """Set a slot to error state with a specific errorMsg."""
     if slot < 0 or slot >= 48:
         raise HTTPException(status_code=400, detail="Invalid slot number")
