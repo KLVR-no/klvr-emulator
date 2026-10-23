@@ -1,0 +1,55 @@
+name: pr checks
+
+# Unit tests and firmware API conformance on every PR and on merges to main.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v
+
+  conformance:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Start the emulator
+        run: |
+          pip install -q -r requirements.txt
+          uvicorn klvr_emulator.main:app --host 127.0.0.1 --port 8000 &
+          for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8000/api/v2/device/info && exit 0; sleep 1; done
+          exit 1
+      # Operator: add repo secret FIRMWARE_READ_TOKEN (fine-grained PAT with Contents read on klvr-chargerpro-firmware).
+      - uses: actions/checkout@v4
+        with:
+          repository: KLVR-no/klvr-chargerpro-firmware
+          ref: release/v1.9.1
+          path: firmware
+          sparse-checkout: |
+            scripts
+            docs/api
+          sparse-checkout-cone-mode: false
+          token: ${{ secrets.FIRMWARE_READ_TOKEN }}
+      - run: python3 firmware/scripts/api_conformance.py http://127.0.0.1:8000
