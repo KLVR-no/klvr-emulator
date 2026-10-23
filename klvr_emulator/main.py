@@ -285,7 +285,7 @@ def require_slot(slot: int):
 
 def require_occupied(slot: int):
     require_slot(slot)
-    if charger_state["batteries"][slot]["slotState"] == "empty":
+    if not charger_state["batteries"][slot]["batteryDetected"]:
         raise HTTPException(status_code=400, detail="Invalid slot number")
 
 
@@ -349,6 +349,8 @@ async def post_device_network(request: Request):
 def firmware_abort():
     firmware_state["main_firmware_pending"] = False
     firmware_state["rear_firmware_pending"] = False
+    firmware_state["main_firmware_size"] = 0
+    firmware_state["rear_firmware_size"] = 0
     firmware_state["target_version"] = None
     return _plain(200, "OTA cancelled")
 
@@ -694,8 +696,7 @@ async def set_charge_percentage(slot: int, request: Request):
         data = await request.json()
         percentage = float(data.get("percentage", 0.0))
 
-        if slot < 0 or slot >= 48:
-            raise HTTPException(status_code=400, detail="Invalid slot number")
+        require_occupied(slot)
         if percentage < 0 or percentage > 100:
             raise HTTPException(status_code=400, detail="Percentage must be between 0 and 100")
 
@@ -717,6 +718,8 @@ async def set_charge_percentage(slot: int, request: Request):
         print(f"🔋 Set slot {slot} charge to: {percentage}% (remaining: {battery['timeRemainingSeconds']}s)")
         notify_state_change()
         return {"status": "success", "index": slot, "percentage": percentage, "timeRemaining": battery["timeRemainingSeconds"]}
+    except HTTPException:
+        raise
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid percentage value")
     except Exception as e:

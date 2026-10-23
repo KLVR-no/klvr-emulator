@@ -448,6 +448,34 @@ class ApiV2(unittest.TestCase):
         self.assertIsNone(main.firmware_state["target_version"])
         self.assertFalse(main.firmware_state["main_firmware_pending"])
 
+    def test_set_charge_on_empty_slot_is_400(self):
+        """Empty bay cannot become done; firmware done is a seated cell (charger_map_api_slot)."""
+        self.call("/charger/eject/7", "POST")
+        status, _, _ = self.raw("/charger/set_charge/7", "POST", {"percentage": 100})
+        self.assertEqual(status, 400)
+        bay = self.call("/charger/status")[1]["batteries"][7]
+        self.assertEqual(bay["slotState"], "empty")
+        self.assertEqual(bay["batteryDetected"], "")
+        self.assertEqual(self.call("/charger/set_cold/7", "POST")[0], 400)
+
+    def test_firmware_abort_clears_uploaded_sizes(self):
+        """ota_cancel_in_progress zeros the transfer counters so a later reboot cannot finish OTA."""
+        saved = dict(main.firmware_state)
+        self.addCleanup(main.firmware_state.update, saved)
+        main.firmware_state.update(
+            main_firmware_pending=True,
+            rear_firmware_pending=True,
+            main_firmware_size=100,
+            rear_firmware_size=200,
+            target_version="9.9.9",
+        )
+        self.raw("/device/firmware_abort", "POST")
+        self.assertEqual(main.firmware_state["main_firmware_size"], 0)
+        self.assertEqual(main.firmware_state["rear_firmware_size"], 0)
+        self.assertFalse(main.firmware_state["main_firmware_pending"])
+        self.assertFalse(main.firmware_state["rear_firmware_pending"])
+        self.assertIsNone(main.firmware_state["target_version"])
+
 
 if __name__ == "__main__":
     unittest.main()
