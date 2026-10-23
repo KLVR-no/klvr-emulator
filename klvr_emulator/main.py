@@ -5,10 +5,22 @@ import atexit
 import asyncio
 import json
 from fastapi import FastAPI, Request, Query, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from zeroconf import ServiceInfo, Zeroconf
+
+# Firmware: system_settings.name is char[20]; default brand string is Klvr.
+DEFAULT_DEVICE_NAME = "Klvr"
+DEVICE_NAME_MAX_LEN = 19
+# network.c klvr_dns_txt — RFC 6763 key=value pairs, nothing else.
+MDNS_TXT = {"ws": "1", "api": "v2"}
+SPEC_BATTERY_TYPES = {"KLVR-AA", "KLVR-AAA"}
+CORS_PREFLIGHT_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Content-Length",
+}
 
 # Get local IP
 def get_host_ip():
@@ -27,7 +39,7 @@ runtime_port = 8000  # Will be overwritten by run.py
 app = FastAPI()
 
 charger_state = {
-    "name": "KLVR Emulator",
+    "name": DEFAULT_DEVICE_NAME,
     "deviceInternalTemperatureC": 24.01,
     "firmwareVersion": "0.1.0",
     "firmwareBuild": "abc123",
@@ -155,8 +167,17 @@ async def startup():
 
 @app.middleware("http")
 async def add_cors(request: Request, call_next):
+    # Firmware OPTIONS is 204 + CORS on every HTTP resource. /ws has no OPTIONS.
+    path = request.url.path
+    if (
+        request.method == "OPTIONS"
+        and path.startswith("/api/v2/")
+        and path != "/api/v2/ws"
+    ):
+        return Response(status_code=204, headers=CORS_PREFLIGHT_HEADERS)
     response = await call_next(request)
-    response.headers['Access-Control-Allow-Origin'] = '*'
+    for key, value in CORS_PREFLIGHT_HEADERS.items():
+        response.headers.setdefault(key, value)
     return response
 
 
@@ -188,7 +209,7 @@ def build_device_info():
 
     overlay = charger_state["displayOverlay"]
     return {
-        "name": f"KLVR Emulator Port {runtime_port}",
+        "name": charger_state["name"],
         "firmwareVersion": charger_state["firmwareVersion"],
         "firmwareBuild": charger_state["firmwareBuild"],
         "ip": charger_state["network"],
@@ -204,9 +225,111 @@ def get_device_info():
     return build_device_info()
 
 
+def _plain(status: int, body: str = "") -> Response:
+    return Response(content=body, status_code=status)
+
+
+def _cut_device_name(name: str) -> str:
+    """device_name_from_json(): reject NUL / bad UTF-8; cut at 19 whole UTF-8 bytes."""
+    if "\x00" in name:
+        raise ValueError("Invalid name")
+    try:
+        raw = name.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Invalid name") from exc
+    if len(raw) <= DEVICE_NAME_MAX_LEN:
+        return name
+    cut = raw[:DEVICE_NAME_MAX_LEN]
+    i = len(cut)
+    while i > 0 and (cut[i - 1] & 0xC0) == 0x80:
+        i -= 1
+    if i > 0 and cut[i - 1] & 0x80:
+        i -= 1
+    return cut[:i].decode("utf-8")
+
+
+def _parse_ipv4(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    parts = value.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        nums = [int(part) for part in parts]
+    except ValueError:
+        return False
+    return all(0 <= n <= 255 for n in nums)
+
+
+def require_slot(slot: int):
+    if slot < 0 or slot >= 48:
+        raise HTTPException(status_code=400, detail="Invalid slot number")
+
+
+@app.get("/api/v2/device/name")
+def get_device_name():
+    return _plain(200, charger_state["name"])
+
+
+@app.post("/api/v2/device/name")
+async def post_device_name(request: Request):
+    try:
+        parsed = json.loads(await request.body())
+    except json.JSONDecodeError:
+        return _plain(400, "Invalid JSON object given")
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("name"), str):
+        return _plain(400, "Invalid JSON object given")
+    try:
+        charger_state["name"] = _cut_device_name(parsed["name"])
+    except ValueError:
+        return _plain(400, "Invalid name")
+    notify_state_change()
+    return _plain(200)
+
+
+@app.api_route("/api/v2/device/identify", methods=["GET", "POST"])
+def device_identify():
+    return _plain(200)
+
+
 @app.get("/api/v2/device/network")
 def get_device_network():
     return charger_state["network"]
+
+
+@app.post("/api/v2/device/network")
+async def post_device_network(request: Request):
+    try:
+        parsed = json.loads(await request.body())
+    except json.JSONDecodeError:
+        return _plain(400, "Invalid JSON object given")
+    if not isinstance(parsed, dict):
+        return _plain(400, "Invalid JSON object given")
+    addr_keys = ("ipAddress", "gatewayAddress", "mask")
+    typ = parsed.get("type")
+    all_fields = typ is not None and all(k in parsed for k in addr_keys)
+    if typ == "dhcp":
+        charger_state["network"]["type"] = "dhcp"
+        notify_state_change()
+        return _plain(200)
+    if typ == "static" and all_fields:
+        if any(not _parse_ipv4(parsed[k]) for k in addr_keys):
+            return _plain(400, "Invalid address given")
+        charger_state["network"]["type"] = "static"
+        for key in addr_keys:
+            charger_state["network"][key] = parsed[key]
+        notify_state_change()
+        return _plain(200)
+    if all_fields and typ not in ("dhcp", "static"):
+        return _plain(400, "Invalid address type")
+    return _plain(400, "Invalid JSON object given")
+
+
+@app.api_route("/api/v2/device/firmware_abort", methods=["GET", "POST"])
+def firmware_abort():
+    firmware_state["main_firmware_pending"] = False
+    firmware_state["rear_firmware_pending"] = False
+    return _plain(200, "OTA cancelled")
 
 
 @app.get("/api/v2/device/firmware_version")
@@ -219,6 +342,9 @@ def get_firmware_version():
 
 @app.post("/api/v2/charger/insert/{slot}")
 async def insert(slot: int, type: str = Query(...)):
+    require_slot(slot)
+    if type not in SPEC_BATTERY_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid battery type")
     b = charger_state["batteries"][slot]
     # Recovery: cold/warm batteries transition back to charging on re-insert
     b["slotState"] = "charging"
@@ -232,6 +358,7 @@ async def insert(slot: int, type: str = Query(...)):
 
 @app.post("/api/v2/charger/eject/{slot}")
 async def eject(slot: int):
+    require_slot(slot)
     b = charger_state["batteries"][slot]
     b["slotState"] = "empty"
     b["stateOfChargePercent"] = 0.0
@@ -332,6 +459,7 @@ async def set_cold(slot: int):
     b = charger_state["batteries"][slot]
     b["slotState"] = "cold"
     b["errorMsg"] = "cold"
+    b["timeRemainingSeconds"] = 0
     notify_state_change()
     return {"ok": True}
 
@@ -344,6 +472,7 @@ async def set_warm(slot: int):
     b = charger_state["batteries"][slot]
     b["slotState"] = "warm"
     b["errorMsg"] = "warm"
+    b["timeRemainingSeconds"] = 0
     notify_state_change()
     return {"ok": True}
 
@@ -373,6 +502,7 @@ async def set_error(slot: int, type: str = Query(...)):
     b = charger_state["batteries"][slot]
     b["slotState"] = "error"
     b["errorMsg"] = type
+    b["timeRemainingSeconds"] = 0
     notify_state_change()
     return {"ok": True}
 
@@ -618,7 +748,7 @@ def bonjour():
         name=f"{service_name}._klvrcharger._tcp.local.",
         addresses=[socket.inet_aton(host_ip)],
         port=runtime_port,
-        properties={"version": "0.1.0", "model": "emulator", "port": str(runtime_port)},
+        properties=MDNS_TXT,
         server=f"klvr-emulator-{runtime_port}.local."
     )
     z.register_service(info)

@@ -565,7 +565,7 @@
   // ── Build slot card (first render only) ─────────────────────────────────
 
   function buildSlotCard(b) {
-    const s = b.slot;
+    const s = b.index;
     const div = document.createElement('div');
     div.className = 'slot-card';
     div.id = `sc-${s}`;
@@ -617,7 +617,7 @@
   // ── Update slot card in-place ─────────────────────────────────────────
 
   function updateSlotCard(b) {
-    const s = b.slot;
+    const s = b.index;
     const card = document.getElementById(`sc-${s}`);
     if (!card) return;
 
