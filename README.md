@@ -95,16 +95,21 @@ Response:
   "name": "Laddare #1",
   "firmwareVersion": "0.1.0",
   "firmwareBuild": "abc123",
-  "deviceInternalTemperatureC": 24.01,
   "ip": {
+    "type": "dhcp",
     "ipAddress": "...",
     "gatewayAddress": "...",
     "mask": "...",
-    "macAddress": "...",
-    "method": "dhcp"
-  }
+    "macAddress": "..."
+  },
+  "thermalThrottleActive": false,
+  "fanSpeedPercent": 0,
+  "displayOverlay": "none"
 }
 ```
+`GET /api/v2/device/network` returns the `ip` object. The WebSocket `battery_status` event carries the full device-info object as `data.deviceInfo`; its network object is `data.deviceInfo.ip`.
+
+Check it against the firmware spec with `scripts/api_conformance.py` from `klvr-chargerpro-firmware`, and run the emulator's own tests with `python -m unittest discover -s tests`.
 
 ### Insert Battery
 Simulates inserting a battery into a slot.
