@@ -48,7 +48,9 @@ jobs:
           repository: KLVR-no/klvr-chargerpro-firmware
           ref: release/v1.9.1
           path: firmware
-          sparse-checkout: scripts
+          sparse-checkout: |
+            scripts
+            docs/api
           sparse-checkout-cone-mode: false
           token: ${{ secrets.FIRMWARE_READ_TOKEN }}
           persist-credentials: false
