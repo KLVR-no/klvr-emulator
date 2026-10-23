@@ -28,7 +28,9 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
 
+  # Fork PRs don't get the secret; conformance runs on same-repo PRs and on every push to main.
   conformance:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +43,6 @@ jobs:
           uvicorn klvr_emulator.main:app --host 127.0.0.1 --port 8000 &
           for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8000/api/v2/charger/status && exit 0; sleep 1; done
           exit 1
-      # Operator: add repo secret FIRMWARE_READ_TOKEN (fine-grained PAT with Contents read on klvr-chargerpro-firmware).
       - uses: actions/checkout@v4
         with:
           repository: KLVR-no/klvr-chargerpro-firmware
