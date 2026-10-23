@@ -24,8 +24,8 @@ labels: []
 
 ## Verification
 
-- [ ] Test written first, fails on the base branch
-- [ ] PR CI green
+- [ ] Test written first, fails on the base branch (when this change touches code; otherwise n/a: e.g. docs-only)
+- [ ] PR CI green (when the repo has CI for this change; otherwise n/a: e.g. docs-only)
 - [ ] Reviewer: simplicity standard and repo invariants, net lines reported
 - [ ] Red team (code changes)
 - [ ] Parity (cross-repo)

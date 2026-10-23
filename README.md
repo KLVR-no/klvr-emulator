@@ -4,11 +4,11 @@ A 48-slot charger emulator that replicates the KLVR Charger Pro API and device b
 
 ## Canon
 
-The emulator follows the firmware; it never leads. What the charger sends, and when, is decided in the firmware repo `KLVR-no/klvr-chargerpro-firmware` on the active train branch (today `release/v1.9.1`):
+The emulator follows the firmware; it never leads. What the charger sends, and when, is decided in the firmware repo `KLVR-no/klvr-chargerpro-firmware` on the current train branch (`release/v1.9.1`):
 
-- `docs/user-facing-contract.md`: states, words, compatibility rules (§8), the gap ledger
-- `docs/api-integration-guide.md`: endpoints and fields
-- `docs/agents/README.md`: how a firmware API change reaches the emulator and Klvr Control in the same release train
+- [docs/user-facing-contract.md](https://github.com/KLVR-no/klvr-chargerpro-firmware/blob/release/v1.9.1/docs/user-facing-contract.md): states, words, compatibility rules (§8), the gap ledger
+- [docs/api-integration-guide.md](https://github.com/KLVR-no/klvr-chargerpro-firmware/blob/release/v1.9.1/docs/api-integration-guide.md): endpoints and fields
+- [docs/agents/README.md](https://github.com/KLVR-no/klvr-chargerpro-firmware/blob/release/v1.9.1/docs/agents/README.md): how a firmware API change reaches the emulator and Klvr Control in the same release train
 
 An API change lands in the firmware first, then here, then in Klvr Control. If the emulator and a real charger disagree, the charger is right and the emulator gets an issue.
 
