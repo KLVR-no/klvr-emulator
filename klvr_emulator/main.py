@@ -242,9 +242,15 @@ async def eject(slot: int):
 
 
 @app.post("/api/v2/charger/bulk_insert")
-async def bulk_insert():
-    """Insert 37 batteries with random types (AA/AAA) and SOC levels, always including 4-5 full batteries"""
+async def bulk_insert(
+    no_aa: bool = Query(False, description="When true, only insert AAA batteries"),
+    no_aaa: bool = Query(False, description="When true, only insert AA batteries"),
+):
+    """Insert 37 batteries with random SOC levels and optional AA/AAA filtering."""
     import random
+
+    if no_aa and no_aaa:
+        raise HTTPException(status_code=400, detail="Cannot set both no_aa and no_aaa")
 
     for b in charger_state["batteries"]:
         b["slotState"] = "empty"
@@ -254,6 +260,11 @@ async def bulk_insert():
         b["errorMsg"] = ""
 
     battery_types = ["KLVR-AA", "KLVR-AAA"]
+    if no_aa:
+        battery_types = ["KLVR-AAA"]
+    elif no_aaa:
+        battery_types = ["KLVR-AA"]
+
     slots_to_fill = random.sample(range(48), 37)
     full_batteries_count = random.randint(4, 5)
     full_battery_slots = random.sample(slots_to_fill, full_batteries_count)
@@ -291,7 +302,9 @@ async def bulk_insert():
             "timeRemaining": time_remaining
         })
 
-    print(f"🔋 Bulk inserted 37 batteries: {len([b for b in batteries_inserted if b['type'] == 'KLVR-AA'])} AA, {len([b for b in batteries_inserted if b['type'] == 'KLVR-AAA'])} AAA ({full_count} full)")
+    aa_count = len([b for b in batteries_inserted if b["type"] == "KLVR-AA"])
+    aaa_count = len([b for b in batteries_inserted if b["type"] == "KLVR-AAA"])
+    print(f"🔋 Bulk inserted 37 batteries: {aa_count} AA, {aaa_count} AAA ({full_count} full)")
 
     notify_state_change()
     return {
@@ -300,11 +313,13 @@ async def bulk_insert():
         "batteries": batteries_inserted,
         "summary": {
             "total": len(batteries_inserted),
-            "aa_count": len([b for b in batteries_inserted if b["type"] == "KLVR-AA"]),
-            "aaa_count": len([b for b in batteries_inserted if b["type"] == "KLVR-AAA"]),
+            "aa_count": aa_count,
+            "aaa_count": aaa_count,
             "avg_soc": round(sum(b["soc"] for b in batteries_inserted) / len(batteries_inserted), 1),
-            "full_batteries": full_count
-        }
+            "full_batteries": full_count,
+            "no_aa": no_aa,
+            "no_aaa": no_aaa,
+        },
     }
 
 
