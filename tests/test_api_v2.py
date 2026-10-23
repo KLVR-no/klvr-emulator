@@ -27,8 +27,13 @@ class ApiV2(unittest.TestCase):
             port = s.getsockname()[1]
         cls.base = f"http://127.0.0.1:{port}"
         cls.server = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=port, log_level="warning"))
-        threading.Thread(target=cls.server.run, daemon=True).start()
+        thread = threading.Thread(target=cls.server.run, daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 10
         while not cls.server.started:
+            if not thread.is_alive() or time.monotonic() > deadline:
+                cls.server.should_exit = True
+                raise RuntimeError("emulator server did not start")
             time.sleep(0.05)
 
     @classmethod

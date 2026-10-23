@@ -107,7 +107,7 @@ Response:
   "displayOverlay": "none"
 }
 ```
-`GET /api/v2/device/network` returns the `ip` object. The WebSocket `battery_status` event carries the same object as `data.deviceInfo`.
+`GET /api/v2/device/network` returns the `ip` object. The WebSocket `battery_status` event carries the full device-info object as `data.deviceInfo`; its network object is `data.deviceInfo.ip`.
 
 Check it against the firmware spec with `scripts/api_conformance.py` from `klvr-chargerpro-firmware`, and run the emulator's own tests with `python -m unittest discover -s tests`.
 
