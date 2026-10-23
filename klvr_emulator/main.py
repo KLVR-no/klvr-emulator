@@ -21,6 +21,20 @@ CORS_PREFLIGHT_HEADERS = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Content-Length",
 }
+# Firmware registers OPTIONS per HTTP resource (http_server.c). /ws has none.
+FIRMWARE_OPTIONS_PATHS = frozenset({
+    "/api/v2/charger/status",
+    "/api/v2/device/info",
+    "/api/v2/device/identify",
+    "/api/v2/device/network",
+    "/api/v2/device/name",
+    "/api/v2/device/firmware_version",
+    "/api/v2/device/firmware_charger",
+    "/api/v2/device/firmware_rear",
+    "/api/v2/device/firmware_abort",
+    "/api/v2/device/reboot",
+})
+NETWORK_JSON_FIELDS = ("type", "ipAddress", "gatewayAddress", "mask")
 
 # Get local IP
 def get_host_ip():
@@ -167,13 +181,8 @@ async def startup():
 
 @app.middleware("http")
 async def add_cors(request: Request, call_next):
-    # Firmware OPTIONS is 204 + CORS on every HTTP resource. /ws has no OPTIONS.
-    path = request.url.path
-    if (
-        request.method == "OPTIONS"
-        and path.startswith("/api/v2/")
-        and path != "/api/v2/ws"
-    ):
+    # Firmware OPTIONS is 204 + CORS on registered HTTP resources only.
+    if request.method == "OPTIONS" and request.url.path in FIRMWARE_OPTIONS_PATHS:
         return Response(status_code=204, headers=CORS_PREFLIGHT_HEADERS)
     response = await call_next(request)
     for key, value in CORS_PREFLIGHT_HEADERS.items():
@@ -230,39 +239,53 @@ def _plain(status: int, body: str = "") -> Response:
 
 
 def _cut_device_name(name: str) -> str:
-    """device_name_from_json(): reject NUL / bad UTF-8; cut at 19 whole UTF-8 bytes."""
+    """device_name_from_json(): reject empty / NUL / bad UTF-8; cut at 19 whole UTF-8 bytes."""
     if "\x00" in name:
         raise ValueError("Invalid name")
     try:
         raw = name.encode("utf-8")
     except UnicodeEncodeError as exc:
         raise ValueError("Invalid name") from exc
-    if len(raw) <= DEVICE_NAME_MAX_LEN:
-        return name
-    cut = raw[:DEVICE_NAME_MAX_LEN]
-    i = len(cut)
-    while i > 0 and (cut[i - 1] & 0xC0) == 0x80:
-        i -= 1
-    if i > 0 and cut[i - 1] & 0x80:
-        i -= 1
-    return cut[:i].decode("utf-8")
+    cut = raw[:DEVICE_NAME_MAX_LEN].decode("utf-8", errors="ignore")
+    if not cut:
+        raise ValueError("Invalid name")
+    return cut
 
 
-def _parse_ipv4(value) -> bool:
+def _parse_json_object(raw: bytes):
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _parse_ipv4(value):
+    """parse_ip_address(): sscanf %u.%u.%u.%u, then encode as %d.%d.%d.%d."""
     if not isinstance(value, str):
-        return False
+        return None
     parts = value.split(".")
     if len(parts) != 4:
-        return False
-    try:
-        nums = [int(part) for part in parts]
-    except ValueError:
-        return False
-    return all(0 <= n <= 255 for n in nums)
+        return None
+    nums = []
+    for part in parts:
+        if not part.isascii() or not part.isdigit():
+            return None
+        n = int(part)
+        if n > 255:
+            return None
+        nums.append(n)
+    return "{}.{}.{}.{}".format(*nums)
 
 
 def require_slot(slot: int):
     if slot < 0 or slot >= 48:
+        raise HTTPException(status_code=400, detail="Invalid slot number")
+
+
+def require_occupied(slot: int):
+    require_slot(slot)
+    if charger_state["batteries"][slot]["slotState"] == "empty":
         raise HTTPException(status_code=400, detail="Invalid slot number")
 
 
@@ -273,11 +296,8 @@ def get_device_name():
 
 @app.post("/api/v2/device/name")
 async def post_device_name(request: Request):
-    try:
-        parsed = json.loads(await request.body())
-    except json.JSONDecodeError:
-        return _plain(400, "Invalid JSON object given")
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("name"), str):
+    parsed = _parse_json_object(await request.body())
+    if parsed is None or not isinstance(parsed.get("name"), str):
         return _plain(400, "Invalid JSON object given")
     try:
         charger_state["name"] = _cut_device_name(parsed["name"])
@@ -299,11 +319,10 @@ def get_device_network():
 
 @app.post("/api/v2/device/network")
 async def post_device_network(request: Request):
-    try:
-        parsed = json.loads(await request.body())
-    except json.JSONDecodeError:
+    parsed = _parse_json_object(await request.body())
+    if parsed is None:
         return _plain(400, "Invalid JSON object given")
-    if not isinstance(parsed, dict):
+    if any(key in parsed and not isinstance(parsed[key], str) for key in NETWORK_JSON_FIELDS):
         return _plain(400, "Invalid JSON object given")
     addr_keys = ("ipAddress", "gatewayAddress", "mask")
     typ = parsed.get("type")
@@ -313,11 +332,12 @@ async def post_device_network(request: Request):
         notify_state_change()
         return _plain(200)
     if typ == "static" and all_fields:
-        if any(not _parse_ipv4(parsed[k]) for k in addr_keys):
+        addrs = [_parse_ipv4(parsed[k]) for k in addr_keys]
+        if any(addr is None for addr in addrs):
             return _plain(400, "Invalid address given")
         charger_state["network"]["type"] = "static"
-        for key in addr_keys:
-            charger_state["network"][key] = parsed[key]
+        for key, addr in zip(addr_keys, addrs):
+            charger_state["network"][key] = addr
         notify_state_change()
         return _plain(200)
     if all_fields and typ not in ("dhcp", "static"):
@@ -329,6 +349,7 @@ async def post_device_network(request: Request):
 def firmware_abort():
     firmware_state["main_firmware_pending"] = False
     firmware_state["rear_firmware_pending"] = False
+    firmware_state["target_version"] = None
     return _plain(200, "OTA cancelled")
 
 
@@ -454,8 +475,7 @@ async def bulk_insert(
 @app.post("/api/v2/charger/set_cold/{slot}")
 async def set_cold(slot: int):
     """Set a slot to cold state (BATTERY_STATE_TEMP_COLD)."""
-    if slot < 0 or slot >= 48:
-        raise HTTPException(status_code=400, detail="Invalid slot number")
+    require_occupied(slot)
     b = charger_state["batteries"][slot]
     b["slotState"] = "cold"
     b["errorMsg"] = "cold"
@@ -467,8 +487,7 @@ async def set_cold(slot: int):
 @app.post("/api/v2/charger/set_warm/{slot}")
 async def set_warm(slot: int):
     """Set a slot to warm state (BATTERY_STATE_TEMP_WARM)."""
-    if slot < 0 or slot >= 48:
-        raise HTTPException(status_code=400, detail="Invalid slot number")
+    require_occupied(slot)
     b = charger_state["batteries"][slot]
     b["slotState"] = "warm"
     b["errorMsg"] = "warm"
@@ -495,8 +514,7 @@ VALID_ERROR_TYPES = {"overtemp", "overcurrent", "faulty", "detect_err"}
 @app.post("/api/v2/charger/set_error/{slot}")
 async def set_error(slot: int, type: str = Query(...)):
     """Set a slot to error state with a specific errorMsg."""
-    if slot < 0 or slot >= 48:
-        raise HTTPException(status_code=400, detail="Invalid slot number")
+    require_occupied(slot)
     if type not in VALID_ERROR_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid error type. Must be one of: {', '.join(sorted(VALID_ERROR_TYPES))}")
     b = charger_state["batteries"][slot]
@@ -583,12 +601,12 @@ async def upload_rear_firmware(request: Request, version: str = Query(default=No
 @app.post("/api/v2/device/reboot")
 async def reboot_board(request: Request):
     """Reboot main or rear board — emulated with realistic delays"""
+    board_bytes = await request.body()
+    if board_bytes not in (b"main", b"rear"):
+        return _plain(400, "Expected 'rear' or 'main'")
+    board = board_bytes.decode()
+
     try:
-        board = (await request.body()).decode().strip()
-
-        if board not in ["main", "rear"]:
-            raise HTTPException(status_code=400, detail="Invalid board name. Use 'main' or 'rear'")
-
         print(f"🔄 Emulating {board} board reboot...")
 
         reboot_key = f"{board}_rebooting"
@@ -692,6 +710,7 @@ async def set_charge_percentage(slot: int, request: Request):
         elif percentage >= 100:
             battery["slotState"] = "done"
             battery["timeRemainingSeconds"] = 0
+            battery["errorMsg"] = ""
         elif battery["slotState"] == "empty":
             battery["timeRemainingSeconds"] = 0
 

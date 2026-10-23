@@ -118,9 +118,10 @@ class ApiV2(unittest.TestCase):
         self.assertEqual(net, self.call("/device/info")[1]["ip"])
 
     def test_set_error_refuses_undertemp(self):
+        self.call("/charger/insert/0?type=KLVR-AA", "POST")
+        self.addCleanup(self._eject, 0)
         self.assertEqual(self.call("/charger/set_error/0?type=undertemp", "POST")[0], 400)
         self.assertEqual(self.call("/charger/set_error/0?type=overtemp", "POST")[0], 200)
-        self.call("/charger/eject/0", "POST")
 
     def test_websocket_carries_device_info(self):
         with connect(self.base.replace("http", "ws") + "/api/v2/ws") as ws:
@@ -357,6 +358,95 @@ class ApiV2(unittest.TestCase):
         html = Path("templates/index.html").read_text()
         self.assertIn("const s = b.index;", html)
         self.assertNotIn("const s = b.slot;", html)
+
+    def test_device_name_multibyte_fitting_at_byte_19_is_kept(self):
+        """device_name_from_json: a multibyte char ending at byte 19 is kept."""
+        saved = main.charger_state["name"]
+        self.addCleanup(self._restore_name, saved)
+        status, _, _ = self.raw("/device/name", "POST", {"name": "A" * 17 + "øZ"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.raw("/device/name")[1], ("A" * 17 + "ø").encode())
+
+    def test_device_name_empty_is_invalid(self):
+        """firmware #180 (f5b9272): empty name is 400 Invalid name."""
+        saved = main.charger_state["name"]
+        self.addCleanup(self._restore_name, saved)
+        status, body, _ = self.raw("/device/name", "POST", {"name": ""})
+        self.assertEqual(status, 400)
+        self.assertEqual(body, b"Invalid name")
+        self.assertEqual(self.raw("/device/name")[1], saved.encode())
+
+    def test_non_utf8_json_body_returns_400_not_500(self):
+        """http_server.c: non-UTF-8 body is 400 Invalid JSON object given, not 500."""
+        for path in ("/device/name", "/device/network"):
+            status, body, _ = self.raw(path, "POST", b'{"name":"\xff"}', "application/json")
+            self.assertEqual(status, 400, path)
+            self.assertEqual(body, b"Invalid JSON object given", path)
+
+    def test_network_non_string_fields_and_sscanf_ipv4(self):
+        """network_settings_body_descr is JSON_TOK_STRING; parse_ip_address is %u then %d."""
+        saved = dict(main.charger_state["network"])
+        self.addCleanup(self._restore_network, saved)
+        for payload in (
+            {"type": "dhcp", "ipAddress": 123},
+            {"type": "static", "ipAddress": 123, "gatewayAddress": "10.0.0.1", "mask": "255.255.255.0"},
+            {"type": 123, "ipAddress": "10.0.0.2", "gatewayAddress": "10.0.0.1", "mask": "255.255.255.0"},
+        ):
+            status, body, _ = self.raw("/device/network", "POST", payload)
+            self.assertEqual(status, 400, payload)
+            self.assertEqual(body, b"Invalid JSON object given", payload)
+
+        base_static = {
+            "type": "static",
+            "ipAddress": "192.168.1.10",
+            "gatewayAddress": "192.168.1.1",
+            "mask": "255.255.255.0",
+        }
+        for bad_ip in ("192.168.1.-0", "192.168.1.+1", "192.168.1.1 ", "192.168.1. 1"):
+            status, body, _ = self.raw("/device/network", "POST", {**base_static, "ipAddress": bad_ip})
+            self.assertEqual(status, 400, bad_ip)
+            self.assertEqual(body, b"Invalid address given", bad_ip)
+
+        status, _, _ = self.raw("/device/network", "POST", {**base_static, "ipAddress": "192.168.001.002"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.call("/device/network")[1]["ipAddress"], "192.168.1.2")
+
+    def test_options_on_unknown_path_is_404(self):
+        """Firmware OPTIONS is per-resource; unknown /api/v2/* is Zephyr 404."""
+        status, _, _ = self.raw("/does_not_exist", "OPTIONS")
+        self.assertEqual(status, 404)
+
+    def test_set_charge_100_clears_error_msg(self):
+        """done has empty errorMsg (openapi Battery.errorMsg)."""
+        self.addCleanup(self._eject, 5)
+        self.call("/charger/insert/5?type=KLVR-AA", "POST")
+        self.call("/charger/set_cold/5", "POST")
+        self.raw("/charger/set_charge/5", "POST", {"percentage": 100})
+        bay = self.call("/charger/status")[1]["batteries"][5]
+        self.assertEqual(bay["slotState"], "done")
+        self.assertEqual(bay["errorMsg"], "")
+
+    def test_set_temp_or_error_on_empty_slot_is_400(self):
+        """set_cold / set_warm / set_error on an empty bay is invalid, like a bad slot."""
+        self.call("/charger/eject/6", "POST")
+        self.assertEqual(self.call("/charger/set_cold/6", "POST")[0], 400)
+        self.assertEqual(self.call("/charger/set_warm/6", "POST")[0], 400)
+        self.assertEqual(self.call("/charger/set_error/6?type=overtemp", "POST")[0], 400)
+        self.assertEqual(self.call("/charger/status")[1]["batteries"][6]["slotState"], "empty")
+
+    def test_reboot_invalid_board_and_firmware_abort_clears_target(self):
+        """handle_reboot 400 Expected 'rear' or 'main'; abort clears target_version."""
+        status, body, _ = self.raw("/device/reboot", "POST", "invalid", "text/plain")
+        self.assertEqual(status, 400)
+        self.assertEqual(body, b"Expected 'rear' or 'main'")
+
+        saved = dict(main.firmware_state)
+        self.addCleanup(main.firmware_state.update, saved)
+        main.firmware_state["target_version"] = "9.9.9"
+        main.firmware_state["main_firmware_pending"] = True
+        self.raw("/device/firmware_abort", "POST")
+        self.assertIsNone(main.firmware_state["target_version"])
+        self.assertFalse(main.firmware_state["main_firmware_pending"])
 
 
 if __name__ == "__main__":
