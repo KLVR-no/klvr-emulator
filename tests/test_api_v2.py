@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 
 import uvicorn
+from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
 
 from klvr_emulator import main
@@ -91,6 +92,26 @@ class ApiV2(unittest.TestCase):
             msg = json.loads(ws.recv(timeout=5))
         self.assertEqual(msg["event"], "battery_status")
         self.assertEqual(msg["data"]["deviceInfo"].keys() & INFO_KEYS, INFO_KEYS)
+
+    def test_ninth_websocket_client_gets_1013_server_full(self):
+        """Firmware WS_MAX_CLIENTS=8; overflow closes with 1013 and reason 'server full' (#171)."""
+        ws_url = self.base.replace("http", "ws") + "/api/v2/ws"
+        held = []
+        try:
+            for _ in range(8):
+                held.append(connect(ws_url))
+            ninth = connect(ws_url)
+            try:
+                with self.assertRaises(ConnectionClosed) as ctx:
+                    ninth.recv(timeout=5)
+                closed = ctx.exception
+            finally:
+                ninth.close()
+            self.assertEqual(closed.code, 1013)
+            self.assertEqual(closed.reason, "server full")
+        finally:
+            for ws in held:
+                ws.close()
 
 
 if __name__ == "__main__":
