@@ -1,0 +1,6 @@
+# CodeRabbit reviews a PR once when it opens; the lead asks for the final
+# review with `@coderabbitai review` (KLVR-no/klvr-chargerpro-firmware docs/agents/lead.md §5).
+reviews:
+  auto_review:
+    enabled: true
+    auto_incremental_review: false
