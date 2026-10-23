@@ -39,7 +39,7 @@ jobs:
         run: |
           pip install -q -r requirements.txt
           uvicorn klvr_emulator.main:app --host 127.0.0.1 --port 8000 &
-          for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8000/api/v2/device/info && exit 0; sleep 1; done
+          for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8000/api/v2/charger/status && exit 0; sleep 1; done
           exit 1
       # Operator: add repo secret FIRMWARE_READ_TOKEN (fine-grained PAT with Contents read on klvr-chargerpro-firmware).
       - uses: actions/checkout@v4
@@ -47,9 +47,8 @@ jobs:
           repository: KLVR-no/klvr-chargerpro-firmware
           ref: release/v1.9.1
           path: firmware
-          sparse-checkout: |
-            scripts
-            docs/api
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           token: ${{ secrets.FIRMWARE_READ_TOKEN }}
+          persist-credentials: false
       - run: python3 firmware/scripts/api_conformance.py http://127.0.0.1:8000
