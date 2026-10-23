@@ -68,7 +68,8 @@ firmware_state = {
     "rear_rebooting": False
 }
 
-# WebSocket state — firmware supports WS_MAX_CLIENTS=8; emulator caps at 2
+# WebSocket state — matches firmware WS_MAX_CLIENTS=8
+WS_MAX_CLIENTS = 8
 ws_clients: list[WebSocket] = []
 ws_lock = asyncio.Lock()
 pending_push: bool = False  # debounce flag
@@ -130,8 +131,8 @@ def notify_state_change():
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     async with ws_lock:
-        if len(ws_clients) >= 2:
-            await websocket.close(code=1008)  # Policy violation — max clients
+        if len(ws_clients) >= WS_MAX_CLIENTS:
+            await websocket.close(code=1013, reason="server full")
             return
         ws_clients.append(websocket)
     # Send immediately on connect
