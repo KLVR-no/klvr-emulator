@@ -32,13 +32,16 @@ charger_state = {
     "firmwareVersion": "0.1.0",
     "firmwareBuild": "abc123",
     "deviceStatus": "ok",
-    "network": {
+    "network": {  # the firmware's `ip` object (spec IpConfig)
+        "type": "dhcp",
         "ipAddress": host_ip,
         "gatewayAddress": "10.0.0.1",
         "mask": "255.255.255.0",
-        "macAddress": "00:B0:D0:63:C2:26",
-        "method": "dhcp"
+        "macAddress": "00:b0:d0:63:c2:26"
     },
+    "thermalThrottleActive": False,
+    "fanSpeedPercent": 0,
+    "displayOverlay": "none",
     "batteries": [
         {
             "index": i,
@@ -78,7 +81,8 @@ async def ws_broadcast():
         "event": "battery_status",
         "data": {
             "deviceStatus": charger_state.get("deviceStatus", "ok"),
-            "batteries": charger_state["batteries"]
+            "batteries": charger_state["batteries"],
+            "deviceInfo": build_device_info()
         }
     }
     msg = json.dumps(payload)
@@ -163,8 +167,8 @@ def get_status():
     }
 
 
-@app.get("/api/v2/device/info")
-def get_device_info():
+def build_device_info():
+    """One builder for GET /device/info and the WebSocket deviceInfo (json_content.c emit_device_info)."""
     main_rebooting = firmware_state.get("main_rebooting", False)
     rear_rebooting = firmware_state.get("rear_rebooting", False)
 
@@ -180,14 +184,23 @@ def get_device_info():
     return {
         "name": f"KLVR Emulator Port {runtime_port}",
         "firmwareVersion": charger_state["firmwareVersion"],
-        "ip": {
-            "ipAddress": charger_state["network"]["ipAddress"],
-            "networkMask": charger_state["network"]["mask"],
-            "gateway": charger_state["network"]["gatewayAddress"],
-            "method": charger_state["network"]["method"]
-        },
+        "firmwareBuild": charger_state["firmwareBuild"],
+        "ip": charger_state["network"],
+        "thermalThrottleActive": charger_state["thermalThrottleActive"],
+        "fanSpeedPercent": charger_state["fanSpeedPercent"],
+        "displayOverlay": charger_state["displayOverlay"],
         "status": status
     }
+
+
+@app.get("/api/v2/device/info")
+def get_device_info():
+    return build_device_info()
+
+
+@app.get("/api/v2/device/network")
+def get_device_network():
+    return charger_state["network"]
 
 
 @app.get("/api/v2/device/firmware_version")
@@ -327,7 +340,7 @@ async def bulk_clear():
     return {"ok": True}
 
 
-VALID_ERROR_TYPES = {"overtemp", "undertemp", "overcurrent", "faulty", "detect_err"}
+VALID_ERROR_TYPES = {"overtemp", "overcurrent", "faulty", "detect_err"}
 
 @app.post("/api/v2/charger/set_error/{slot}")
 async def set_error(slot: int, type: str = Query(...)):
