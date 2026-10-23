@@ -167,6 +167,10 @@ def get_status():
     }
 
 
+# charger_overlay_api_name(): anything else the firmware reports as "none"
+DISPLAY_OVERLAYS = {"none", "too_hot", "warm", "cold", "throttled", "too_cold"}
+
+
 def build_device_info():
     """One builder for GET /device/info and the WebSocket deviceInfo (json_content.c emit_device_info)."""
     main_rebooting = firmware_state.get("main_rebooting", False)
@@ -181,14 +185,15 @@ def build_device_info():
     else:
         status = "ready"
 
+    overlay = charger_state["displayOverlay"]
     return {
         "name": f"KLVR Emulator Port {runtime_port}",
         "firmwareVersion": charger_state["firmwareVersion"],
         "firmwareBuild": charger_state["firmwareBuild"],
         "ip": charger_state["network"],
-        "thermalThrottleActive": charger_state["thermalThrottleActive"],
-        "fanSpeedPercent": charger_state["fanSpeedPercent"],
-        "displayOverlay": charger_state["displayOverlay"],
+        "thermalThrottleActive": bool(charger_state["thermalThrottleActive"]),
+        "fanSpeedPercent": int(charger_state["fanSpeedPercent"]),
+        "displayOverlay": overlay if overlay in DISPLAY_OVERLAYS else "none",
         "status": status
     }
 

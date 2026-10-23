@@ -14,6 +14,7 @@ from websockets.sync.client import connect
 from klvr_emulator import main
 
 IP_KEYS = {"type", "ipAddress", "gatewayAddress", "mask", "macAddress"}
+OVERLAYS = ["none", "too_hot", "warm", "cold", "throttled", "too_cold"]  # charger_overlay_api_name()
 INFO_KEYS = {"name", "firmwareVersion", "firmwareBuild", "ip", "thermalThrottleActive",
              "fanSpeedPercent", "displayOverlay"}
 
@@ -48,11 +49,27 @@ class ApiV2(unittest.TestCase):
         self.assertLessEqual(INFO_KEYS, info.keys())
         self.assertIsInstance(info["firmwareBuild"], str)
         self.assertIs(info["thermalThrottleActive"], False)
-        self.assertIsInstance(info["fanSpeedPercent"], int)
-        self.assertIn(info["displayOverlay"], ["none", "too_hot", "warm", "cold"])
+        self.assertIs(type(info["fanSpeedPercent"]), int)  # a bool is an int in Python
+        self.assertIs(type(info["thermalThrottleActive"]), bool)
+        self.assertIn(info["displayOverlay"], OVERLAYS)
         self.assertLessEqual(IP_KEYS, info["ip"].keys())
         self.assertIn(info["ip"]["type"], ["dhcp", "static"])
         self.assertEqual(info["ip"]["macAddress"], info["ip"]["macAddress"].lower())
+
+    def test_info_coerces_like_the_firmware_encoder(self):
+        state = main.charger_state
+        saved = {k: state[k] for k in ("fanSpeedPercent", "thermalThrottleActive", "displayOverlay")}
+        self.addCleanup(state.update, saved)
+        state.update(fanSpeedPercent=True, thermalThrottleActive=1, displayOverlay="bogus")
+        _, info = self.call("/device/info")
+        self.assertIs(type(info["fanSpeedPercent"]), int)
+        self.assertIs(type(info["thermalThrottleActive"]), bool)
+        self.assertEqual(info["displayOverlay"], "none")
+        state["fanSpeedPercent"] = 42.5
+        self.assertEqual(self.call("/device/info")[1]["fanSpeedPercent"], 42)
+        for overlay in OVERLAYS:
+            state["displayOverlay"] = overlay
+            self.assertEqual(self.call("/device/info")[1]["displayOverlay"], overlay)
 
     def test_network_is_the_ip_object_of_info(self):
         status, net = self.call("/device/network")
