@@ -476,6 +476,46 @@ class ApiV2(unittest.TestCase):
         self.assertFalse(main.firmware_state["rear_firmware_pending"])
         self.assertIsNone(main.firmware_state["target_version"])
 
+    def test_status_simulates_starting_and_charger_unreachable(self):
+        """GET /charger/status uses the firmware rule; bays keep their last value."""
+        saved = dict(main.charger_frame)
+        self.addCleanup(main.charger_frame.update, saved)
+        self.call("/charger/insert/0?type=KLVR-AA", "POST")
+        self.addCleanup(self._eject, 0)
+
+        self.assertEqual(self.call("/charger/set_frame?seen=false", "POST")[0], 200)
+        starting = self.call("/charger/status")[1]
+        self.assertEqual(starting["deviceStatus"], "starting")
+
+        timeout = main.COMM_TIMEOUT_MS
+        self.assertEqual(self.call(f"/charger/set_frame?seen=true&age_ms={timeout}", "POST")[0], 200)
+        self.assertEqual(self.call("/charger/status")[1]["deviceStatus"], "ok")
+
+        self.assertEqual(self.call(f"/charger/set_frame?seen=true&age_ms={timeout + 1}", "POST")[0], 200)
+        lost = self.call("/charger/status")[1]
+        self.assertEqual(lost["deviceStatus"], "charger_unreachable")
+        self.assertEqual(lost["batteries"][0]["batteryDetected"], "KLVR-AA")
+        self.assertEqual(lost["batteries"][0]["slotState"], "charging")
+
+
+class DeviceStatus(unittest.TestCase):
+    """C16, C18, Q2: same rule as charger_map_device_status() (firmware #205)."""
+
+    def test_device_status(self):
+        timeout = main.COMM_TIMEOUT_MS
+        self.assertEqual(timeout, 5000)
+
+        self.assertEqual(main.map_device_status(False, 0), "starting")
+        self.assertEqual(main.map_device_status(False, 1), "starting")
+        self.assertEqual(main.map_device_status(False, timeout), "starting")
+        self.assertEqual(main.map_device_status(False, timeout + 1), "starting")
+
+        self.assertEqual(main.map_device_status(True, 0), "ok")
+        self.assertEqual(main.map_device_status(True, timeout - 1), "ok")
+        self.assertEqual(main.map_device_status(True, timeout), "ok")
+        self.assertEqual(main.map_device_status(True, timeout + 1), "charger_unreachable")
+        self.assertEqual(main.map_device_status(True, 60 * 1000), "charger_unreachable")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,25 @@ FIRMWARE_OPTIONS_PATHS = frozenset({
     "/api/v2/device/reboot",
 })
 NETWORK_JSON_FIELDS = ("type", "ipAddress", "gatewayAddress", "mask")
+# Firmware CHARGER_COMM_TIMEOUT_MS / COMM_TIMEOUT_MS. Timeout uses `>`, so 5 s is still ok.
+COMM_TIMEOUT_MS = 5 * 1000
+
+
+def map_device_status(seen_frame: bool, ms_since_frame: int) -> str:
+    """charger_map_device_status(): starting until the first frame; then age > 5 s."""
+    if not seen_frame:
+        return "starting"
+    if ms_since_frame > COMM_TIMEOUT_MS:
+        return "charger_unreachable"
+    return "ok"
+
+
+# Emulator is both boards, so a frame is already here. Tests / set_frame change this.
+charger_frame = {"seen": True, "age_ms": 0}
+
+
+def device_status_now() -> str:
+    return map_device_status(charger_frame["seen"], charger_frame["age_ms"])
 
 # Get local IP
 def get_host_ip():
@@ -57,7 +76,6 @@ charger_state = {
     "deviceInternalTemperatureC": 24.01,
     "firmwareVersion": "0.1.0",
     "firmwareBuild": "abc123",
-    "deviceStatus": "ok",
     "network": {  # the firmware's `ip` object (spec IpConfig)
         "type": "dhcp",
         "ipAddress": host_ip,
@@ -107,7 +125,7 @@ async def ws_broadcast():
     payload = {
         "event": "battery_status",
         "data": {
-            "deviceStatus": charger_state.get("deviceStatus", "ok"),
+            "deviceStatus": device_status_now(),
             "batteries": charger_state["batteries"],
             "deviceInfo": build_device_info()
         }
@@ -193,9 +211,20 @@ async def add_cors(request: Request, call_next):
 @app.get("/api/v2/charger/status")
 def get_status():
     return {
-        "deviceStatus": charger_state.get("deviceStatus", "ok"),
+        "deviceStatus": device_status_now(),
         "batteries": charger_state["batteries"]
     }
+
+
+@app.post("/api/v2/charger/set_frame")
+def set_frame(seen: bool = Query(...), age_ms: int = Query(0)):
+    """Emulator-only: set the charger-board frame inputs that pick deviceStatus."""
+    if age_ms < 0:
+        raise HTTPException(status_code=400, detail="age_ms must be >= 0")
+    charger_frame["seen"] = seen
+    charger_frame["age_ms"] = age_ms
+    notify_state_change()
+    return {"ok": True, "deviceStatus": device_status_now()}
 
 
 # charger_overlay_api_name(): anything else the firmware reports as "none"
