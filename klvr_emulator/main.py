@@ -37,6 +37,8 @@ FIRMWARE_OPTIONS_PATHS = frozenset({
 NETWORK_JSON_FIELDS = ("type", "ipAddress", "gatewayAddress", "mask")
 # Firmware CHARGER_COMM_TIMEOUT_MS / COMM_TIMEOUT_MS. Timeout uses `>`, so 5 s is still ok.
 COMM_TIMEOUT_MS = 5 * 1000
+# Firmware ChargerStatus.required. totals / etaSeconds are additive (C7); 1.9.0 omits them.
+STATUS_REQUIRED_KEYS = frozenset({"deviceStatus", "batteries"})
 
 
 def map_device_status(seen_frame: bool, ms_since_frame: int) -> str:
@@ -54,6 +56,33 @@ charger_frame = {"seen": True, "age_ms": 0}
 
 def device_status_now() -> str:
     return map_device_status(charger_frame["seen"], charger_frame["age_ms"])
+
+
+# C7: same numbers as thermal_totals. JSON done is the verdict done count.
+verdict = {
+    "aa": {"done": 0, "occupied": 0, "eta_s": 0},
+    "aaa": {"done": 0, "occupied": 0, "eta_s": 0},
+}
+
+
+def encode_verdict_totals(v):
+    """Copy verdict totals/ETA. Keys: totals.AA/AAA.{done,occupied}, etaSeconds.AA/AAA."""
+    return {
+        "totals": {
+            "AA": {"done": v["aa"]["done"], "occupied": v["aa"]["occupied"]},
+            "AAA": {"done": v["aaa"]["done"], "occupied": v["aaa"]["occupied"]},
+        },
+        "etaSeconds": {"AA": v["aa"]["eta_s"], "AAA": v["aaa"]["eta_s"]},
+    }
+
+
+def charger_status_fields():
+    return {
+        "deviceStatus": device_status_now(),
+        "batteries": charger_state["batteries"],
+        **encode_verdict_totals(verdict),
+    }
+
 
 # Get local IP
 def get_host_ip():
@@ -125,8 +154,7 @@ async def ws_broadcast():
     payload = {
         "event": "battery_status",
         "data": {
-            "deviceStatus": device_status_now(),
-            "batteries": charger_state["batteries"],
+            **charger_status_fields(),
             "deviceInfo": build_device_info()
         }
     }
@@ -210,10 +238,7 @@ async def add_cors(request: Request, call_next):
 
 @app.get("/api/v2/charger/status")
 def get_status():
-    return {
-        "deviceStatus": device_status_now(),
-        "batteries": charger_state["batteries"]
-    }
+    return charger_status_fields()
 
 
 @app.post("/api/v2/charger/set_frame")

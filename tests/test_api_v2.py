@@ -497,6 +497,38 @@ class ApiV2(unittest.TestCase):
         self.assertEqual(lost["batteries"][0]["batteryDetected"], "KLVR-AA")
         self.assertEqual(lost["batteries"][0]["slotState"], "charging")
 
+    def test_status_and_ws_totals_from_verdict_mixed_rack(self):
+        """C7: HTTP and WS copy the verdict. JSON done matches slotState. Batteries are not recounted."""
+        saved = {k: dict(main.verdict[k]) for k in ("aa", "aaa")}
+
+        def restore():
+            for key, values in saved.items():
+                main.verdict[key].update(values)
+
+        self.addCleanup(restore)
+        main.verdict["aa"].update(done=5, occupied=24, eta_s=8400)
+        main.verdict["aaa"].update(done=1, occupied=17, eta_s=2700)
+        # A seated AA would recount as occupied 1 if the encoder scanned bays.
+        self.call("/charger/insert/0?type=KLVR-AA", "POST")
+        self.addCleanup(self._eject, 0)
+
+        expected_totals = {
+            "AA": {"done": 5, "occupied": 24},
+            "AAA": {"done": 1, "occupied": 17},
+        }
+        expected_eta = {"AA": 8400, "AAA": 2700}
+
+        status = self.call("/charger/status")[1]
+        self.assertEqual(status["totals"], expected_totals)
+        self.assertEqual(status["etaSeconds"], expected_eta)
+        self.assertNotIn("ready", status["totals"]["AA"])
+        self.assertNotIn("ready", status["totals"]["AAA"])
+
+        with connect(self.base.replace("http", "ws") + "/api/v2/ws") as ws:
+            msg = json.loads(ws.recv(timeout=5))
+        self.assertEqual(msg["data"]["totals"], expected_totals)
+        self.assertEqual(msg["data"]["etaSeconds"], expected_eta)
+
 
 class DeviceStatus(unittest.TestCase):
     """C16, C18, Q2: same rule as charger_map_device_status() (firmware #205)."""
@@ -515,6 +547,33 @@ class DeviceStatus(unittest.TestCase):
         self.assertEqual(main.map_device_status(True, timeout), "ok")
         self.assertEqual(main.map_device_status(True, timeout + 1), "charger_unreachable")
         self.assertEqual(main.map_device_status(True, 60 * 1000), "charger_unreachable")
+
+
+class VerdictTotals(unittest.TestCase):
+    """C7: totals.AA/AAA.{done,occupied} and etaSeconds.AA/AAA from the verdict."""
+
+    MIXED = {
+        "aa": {"done": 5, "occupied": 24, "eta_s": 8400},
+        "aaa": {"done": 1, "occupied": 17, "eta_s": 2700},
+    }
+
+    def test_encode_verdict_totals_copies_mixed_rack(self):
+        encoded = main.encode_verdict_totals(self.MIXED)
+        self.assertEqual(encoded, {
+            "totals": {
+                "AA": {"done": 5, "occupied": 24},
+                "AAA": {"done": 1, "occupied": 17},
+            },
+            "etaSeconds": {"AA": 8400, "AAA": 2700},
+        })
+        self.assertNotIn("ready", encoded["totals"]["AA"])
+        self.assertNotIn("ready", encoded["totals"]["AAA"])
+
+    def test_status_without_c7_keys_is_still_valid(self):
+        """1.9.0 chargers omit totals / etaSeconds; those keys are not required."""
+        payload = {"deviceStatus": "ok", "batteries": []}
+        self.assertTrue(main.STATUS_REQUIRED_KEYS <= payload.keys())
+        self.assertFalse(main.STATUS_REQUIRED_KEYS & {"totals", "etaSeconds"})
 
 
 if __name__ == "__main__":
