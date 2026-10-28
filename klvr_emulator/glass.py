@@ -59,13 +59,31 @@ def _slot_to_state(slot: str, err: str) -> str:
     return "charging"
 
 
-def status_to_state_text(status: dict, name: str = "Klvr", version: str = "1.9.1") -> str:
+def status_to_state_text(
+    status: dict,
+    name: str = "Klvr",
+    version: str = "1.9.1",
+    *,
+    screen: str = "main",
+    clicks: int = 0,
+    network: dict | None = None,
+) -> str:
+    """Build a ui-simulator .state from live twin status + knob facts."""
     lines = [
         "time 10000",
-        "screen main",
+        f"screen {screen}",
         f"name {name}",
         f"version {version}",
     ]
+    if clicks:
+        lines.append(f"clicks {max(0, min(100, int(clicks)))}")
+    if screen.startswith("network") and network:
+        typ = network.get("type") or "dhcp"
+        ip = network.get("ipAddress") or "0.0.0.0"
+        gw = network.get("gatewayAddress") or "0.0.0.0"
+        mask = network.get("mask") or "24"
+        mac = network.get("macAddress") or "02:4b:4c:56:52:01"
+        lines.append(f"network {typ} ip={ip} gw={gw} mask={mask} mac={mac}")
     for b in status.get("batteries") or []:
         if b.get("slotState") == "empty":
             continue
@@ -80,7 +98,15 @@ def status_to_state_text(status: dict, name: str = "Klvr", version: str = "1.9.1
     return "\n".join(lines) + "\n"
 
 
-def render_png(status: dict, name: str = "Klvr", version: str = "1.9.1") -> bytes | None:
+def render_png(
+    status: dict,
+    name: str = "Klvr",
+    version: str = "1.9.1",
+    *,
+    screen: str = "main",
+    clicks: int = 0,
+    network: dict | None = None,
+) -> bytes | None:
     """Return a 480×128 PNG from the firmware host renderer, or None."""
     global _cache_png, _cache_at
     now = time.monotonic()
@@ -90,7 +116,14 @@ def render_png(status: dict, name: str = "Klvr", version: str = "1.9.1") -> byte
     bin_path = render_bin()
     if bin_path is None:
         return None
-    text = status_to_state_text(status, name=name, version=version)
+    text = status_to_state_text(
+        status,
+        name=name,
+        version=version,
+        screen=screen,
+        clicks=clicks,
+        network=network,
+    )
     with tempfile.TemporaryDirectory(prefix="twin-glass-") as tmp:
         state = Path(tmp) / "live.state"
         out = Path(tmp) / "glass.png"

@@ -67,9 +67,14 @@ _last_snap: dict = {}
 bay_overrides: dict[int, dict] = {}
 
 
-# Knob / encoder edges for the twin window (firmware glass consumes these
-# when the LVGL path is linked; today they are recorded for the engineer view).
-encoder_state = {"detents": 0, "pressed": False, "press_ms": 0}
+# Knob / encoder edges → ui-simulator screen/clicks (same MAIN UI path).
+encoder_state = {
+    "detents": 0,
+    "pressed": False,
+    "press_ms": 0,
+    "clicks": 0,
+    "screen": "main",
+}
 
 
 def apply_twin_snap(snap: dict) -> None:
@@ -821,6 +826,9 @@ def twin_glass_png():
         status,
         name=charger_state.get("name") or "Klvr",
         version=charger_state.get("firmwareVersion") or "1.9.1",
+        screen=encoder_state.get("screen") or "main",
+        clicks=int(encoder_state.get("clicks") or 0),
+        network=charger_state.get("network"),
     )
     if not png:
         raise HTTPException(
@@ -832,7 +840,7 @@ def twin_glass_png():
 
 @app.post("/api/v2/twin/encoder")
 async def twin_encoder(request: Request):
-    """Knob detents / press from the twin window."""
+    """Knob detents / press → same glass inputs as MAIN (targeting, network ≥1 s)."""
     try:
         body = await request.json()
     except Exception:
@@ -840,10 +848,23 @@ async def twin_encoder(request: Request):
     detents = int(body.get("detents") or 0)
     if detents:
         encoder_state["detents"] = encoder_state.get("detents", 0) + detents
+        encoder_state["clicks"] = max(
+            0, min(100, int(encoder_state.get("clicks") or 0) + detents)
+        )
     if "pressed" in body:
-        encoder_state["pressed"] = bool(body["pressed"])
-        if encoder_state["pressed"]:
+        was = bool(encoder_state.get("pressed"))
+        now = bool(body["pressed"])
+        encoder_state["pressed"] = now
+        if now and not was:
             encoder_state["press_ms"] = int(time.time() * 1000)
+        elif was and not now:
+            held = int(time.time() * 1000) - int(encoder_state.get("press_ms") or 0)
+            # UI_LONG_PRESS_MS = 1000: long press on main opens network settings.
+            if held >= 1000 and encoder_state.get("screen") == "main":
+                encoder_state["screen"] = "network_settings"
+            elif held < 1000 and encoder_state.get("screen") == "network_settings":
+                encoder_state["screen"] = "main"
+            encoder_state["press_ms"] = 0
     twin_glass.invalidate()
     return {"ok": True, "encoder": encoder_state}
 
