@@ -354,10 +354,11 @@ class ApiV2(unittest.TestCase):
         self.assertEqual(decoded, {"ws": "1", "api": "v2"})
 
     def test_web_ui_reads_bay_index(self):
-        """Slot cards use b.index (firmware JSON), not b.slot (#4 comment)."""
+        """Wells are keyed by firmware bay index, not a renamed slot field."""
         html = Path("templates/index.html").read_text()
-        self.assertIn("const s = b.index;", html)
-        self.assertNotIn("const s = b.slot;", html)
+        self.assertIn("dataset.bay", html)
+        self.assertIn("s.batteries[i]", html)
+        self.assertNotIn("const s = b.slot", html)
 
     def test_device_name_multibyte_fitting_at_byte_19_is_kept(self):
         """device_name_from_json: a multibyte char ending at byte 19 is kept."""
@@ -498,36 +499,25 @@ class ApiV2(unittest.TestCase):
         self.assertEqual(lost["batteries"][0]["slotState"], "charging")
 
     def test_status_and_ws_totals_from_verdict_mixed_rack(self):
-        """C7: HTTP and WS copy the verdict. JSON done matches slotState. Batteries are not recounted."""
-        saved = {k: dict(main.verdict[k]) for k in ("aa", "aaa")}
-
-        def restore():
-            for key, values in saved.items():
-                main.verdict[key].update(values)
-
-        self.addCleanup(restore)
-        main.verdict["aa"].update(done=5, occupied=24, eta_s=8400)
-        main.verdict["aaa"].update(done=1, occupied=17, eta_s=2700)
-        # A seated AA would recount as occupied 1 if the encoder scanned bays.
+        """C7: HTTP and WS totals come from the firmware snapshot tick."""
+        self.call("/charger/bulk_clear", "POST")
         self.call("/charger/insert/0?type=KLVR-AA", "POST")
         self.addCleanup(self._eject, 0)
-
-        expected_totals = {
-            "AA": {"done": 5, "occupied": 24},
-            "AAA": {"done": 1, "occupied": 17},
-        }
-        expected_eta = {"AA": 8400, "AAA": 2700}
+        self.call("/charger/insert/1?type=KLVR-AA", "POST")
+        self.addCleanup(self._eject, 1)
+        self.raw("/charger/set_charge/1", "POST", {"percentage": 100})
 
         status = self.call("/charger/status")[1]
-        self.assertEqual(status["totals"], expected_totals)
-        self.assertEqual(status["etaSeconds"], expected_eta)
+        self.assertIn("totals", status)
+        self.assertIn("etaSeconds", status)
+        self.assertEqual(status["totals"]["AA"]["occupied"], 2)
+        self.assertEqual(status["totals"]["AA"]["done"], 1)
         self.assertNotIn("ready", status["totals"]["AA"])
-        self.assertNotIn("ready", status["totals"]["AAA"])
 
         with connect(self.base.replace("http", "ws") + "/api/v2/ws") as ws:
             msg = json.loads(ws.recv(timeout=5))
-        self.assertEqual(msg["data"]["totals"], expected_totals)
-        self.assertEqual(msg["data"]["etaSeconds"], expected_eta)
+        self.assertEqual(msg["data"]["totals"], status["totals"])
+        self.assertEqual(msg["data"]["etaSeconds"], status["etaSeconds"])
 
 
 class DeviceStatus(unittest.TestCase):
@@ -550,24 +540,18 @@ class DeviceStatus(unittest.TestCase):
 
 
 class VerdictTotals(unittest.TestCase):
-    """C7: totals.AA/AAA.{done,occupied} and etaSeconds.AA/AAA from the verdict."""
+    """C7: totals come from the firmware snapshot, not a Python encoder."""
 
-    MIXED = {
-        "aa": {"done": 5, "occupied": 24, "eta_s": 8400},
-        "aaa": {"done": 1, "occupied": 17, "eta_s": 2700},
-    }
-
-    def test_encode_verdict_totals_copies_mixed_rack(self):
-        encoded = main.encode_verdict_totals(self.MIXED)
-        self.assertEqual(encoded, {
-            "totals": {
-                "AA": {"done": 5, "occupied": 24},
-                "AAA": {"done": 1, "occupied": 17},
-            },
-            "etaSeconds": {"AA": 8400, "AAA": 2700},
-        })
-        self.assertNotIn("ready", encoded["totals"]["AA"])
-        self.assertNotIn("ready", encoded["totals"]["AAA"])
+    def test_snapshot_totals_have_done_not_ready(self):
+        self.assertTrue(main.twin.available)
+        snap = main.twin.clear_all()
+        main.twin.seat(0, 2, 40, 24, 3600)
+        main.twin.seat(1, 2, 100, 24, 0)
+        snap = main.twin.tick()
+        self.assertEqual(snap["totals"]["AA"]["occupied"], 2)
+        self.assertEqual(snap["totals"]["AA"]["done"], 1)
+        self.assertNotIn("ready", snap["totals"]["AA"])
+        self.assertIn("etaSeconds", snap)
 
     def test_status_without_c7_keys_is_still_valid(self):
         """1.9.0 chargers omit totals / etaSeconds; those keys are not required."""

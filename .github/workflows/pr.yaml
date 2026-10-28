@@ -20,14 +20,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fork PRs don't get FIRMWARE_READ_TOKEN; twin library build needs it.
   tests:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Read firmware pin
+        id: pin
+        run: echo "sha=$(tr -d '[:space:]' < firmware.pin)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: KLVR-no/klvr-chargerpro-firmware
+          ref: ${{ steps.pin.outputs.sha }}
+          path: firmware
+          token: ${{ secrets.FIRMWARE_READ_TOKEN }}
+          persist-credentials: false
+      - name: Build pinned firmware twin library
+        run: |
+          make -C firmware/tools/charger-twin all
+          echo "CHARGER_TWIN_LIB=$PWD/firmware/build/charger-twin/libcharger_twin.so" >> "$GITHUB_ENV"
+          echo "FIRMWARE_ROOT=$PWD/firmware" >> "$GITHUB_ENV"
       - run: pip install -r requirements.txt
+      - run: chmod +x scripts/check-no-second-decider.sh && scripts/check-no-second-decider.sh
       - run: python -m unittest discover -s tests -v
 
   # Fork PRs don't get the secret; conformance runs on same-repo PRs and on every push to main.
@@ -39,6 +57,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Read firmware pin
+        id: pin
+        run: echo "sha=$(tr -d '[:space:]' < firmware.pin)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: KLVR-no/klvr-chargerpro-firmware
+          ref: ${{ steps.pin.outputs.sha }}
+          path: firmware-lib
+          token: ${{ secrets.FIRMWARE_READ_TOKEN }}
+          persist-credentials: false
+      - name: Build pinned firmware twin library
+        run: |
+          make -C firmware-lib/tools/charger-twin all
+          echo "CHARGER_TWIN_LIB=$PWD/firmware-lib/build/charger-twin/libcharger_twin.so" >> "$GITHUB_ENV"
       - name: Start the emulator
         run: |
           pip install -q -r requirements.txt

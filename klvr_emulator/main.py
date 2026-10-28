@@ -5,10 +5,13 @@ import atexit
 import asyncio
 import json
 from fastapi import FastAPI, Request, Query, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from zeroconf import ServiceInfo, Zeroconf
+
+from klvr_emulator import glass as twin_glass
+from klvr_emulator import snapshot as twin_snapshot
 
 # Firmware: system_settings.name is char[20]; default brand string is Klvr.
 DEFAULT_DEVICE_NAME = "Klvr"
@@ -58,30 +61,59 @@ def device_status_now() -> str:
     return map_device_status(charger_frame["seen"], charger_frame["age_ms"])
 
 
-# C7: same numbers as thermal_totals. JSON done is the verdict done count.
-verdict = {
-    "aa": {"done": 0, "occupied": 0, "eta_s": 0},
-    "aaa": {"done": 0, "occupied": 0, "eta_s": 0},
+twin = twin_snapshot.FirmwareSnapshot()
+_last_snap: dict = {}
+# Lab injects (set_cold / set_warm / set_error) until the next seat/pull clears them.
+bay_overrides: dict[int, dict] = {}
+
+
+# Knob / encoder edges → ui-simulator screen/clicks (same MAIN UI path).
+encoder_state = {
+    "detents": 0,
+    "pressed": False,
+    "press_ms": 0,
+    "clicks": 0,
+    "screen": "main",
 }
 
 
-def encode_verdict_totals(v):
-    """Copy verdict totals/ETA. Keys: totals.AA/AAA.{done,occupied}, etaSeconds.AA/AAA."""
-    return {
-        "totals": {
-            "AA": {"done": v["aa"]["done"], "occupied": v["aa"]["occupied"]},
-            "AAA": {"done": v["aaa"]["done"], "occupied": v["aaa"]["occupied"]},
-        },
-        "etaSeconds": {"AA": v["aa"]["eta_s"], "AAA": v["aaa"]["eta_s"]},
-    }
+def apply_twin_snap(snap: dict) -> None:
+    """Copy one firmware snapshot into the HTTP/WS surfaces. No local totals."""
+    global _last_snap
+    _last_snap = snap
+    bats = []
+    for b in snap.get("batteries", []):
+        row = {
+            "index": b["index"],
+            "batteryBayTempC": b["batteryBayTempC"],
+            "slotState": b["slotState"],
+            "stateOfChargePercent": b["stateOfChargePercent"],
+            "timeRemainingSeconds": b["timeRemainingSeconds"],
+            "errorMsg": b.get("errorMsg", ""),
+            "batteryDetected": b.get("batteryDetected", ""),
+        }
+        ov = bay_overrides.get(b["index"])
+        if ov:
+            row.update(ov)
+        bats.append(row)
+    charger_state["batteries"] = bats
+    charger_state["displayOverlay"] = snap.get("displayOverlay", "none")
+    charger_state["thermalThrottleActive"] = bool(snap.get("thermalThrottleActive", False))
+    charger_state["bay_lights"] = [b.get("led") for b in snap.get("batteries", [])]
 
 
 def charger_status_fields():
-    return {
+    if twin.available:
+        apply_twin_snap(twin.tick())
+    fields = {
         "deviceStatus": device_status_now(),
         "batteries": charger_state["batteries"],
-        **encode_verdict_totals(verdict),
     }
+    if _last_snap.get("totals") is not None:
+        fields["totals"] = _last_snap["totals"]
+    if _last_snap.get("etaSeconds") is not None:
+        fields["etaSeconds"] = _last_snap["etaSeconds"]
+    return fields
 
 
 # Get local IP
@@ -125,7 +157,8 @@ charger_state = {
             "errorMsg": "",
             "batteryDetected": ""
         } for i in range(48)
-    ]
+    ],
+    "bay_lights": [None] * 48,
 }
 
 # Firmware update state
@@ -363,6 +396,18 @@ async def post_device_name(request: Request):
 
 @app.api_route("/api/v2/device/identify", methods=["GET", "POST"])
 def device_identify():
+    """Identify: firmware breath on all bays for ~10 s (UX-11)."""
+    if twin.available:
+        twin.set_identify(True)
+
+        def _end():
+            time.sleep(10)
+            twin.set_identify(False)
+            twin_glass.invalidate()
+
+        threading.Thread(target=_end, daemon=True).start()
+        apply_twin_snap(twin.tick())
+        notify_state_change()
     return _plain(200)
 
 
@@ -422,13 +467,13 @@ async def insert(slot: int, type: str = Query(...)):
     require_slot(slot)
     if type not in SPEC_BATTERY_TYPES:
         raise HTTPException(status_code=400, detail="Invalid battery type")
-    b = charger_state["batteries"][slot]
-    # Recovery: cold/warm batteries transition back to charging on re-insert
-    b["slotState"] = "charging"
-    b["stateOfChargePercent"] = 5.0
-    b["timeRemainingSeconds"] = 7200
-    b["batteryDetected"] = type
-    b["errorMsg"] = ""
+    if not twin.available:
+        raise HTTPException(status_code=503, detail="firmware snapshot library not loaded")
+    bay_overrides.pop(slot, None)
+    # Injected readings: low SoC cell, remaining for the twin Fill/seat path.
+    rem = 90 * 60
+    apply_twin_snap(twin.seat(slot, twin_snapshot.type_code(type), 5, 24, rem))
+    twin_glass.invalidate()
     notify_state_change()
     return {"ok": True}
 
@@ -436,12 +481,11 @@ async def insert(slot: int, type: str = Query(...)):
 @app.post("/api/v2/charger/eject/{slot}")
 async def eject(slot: int):
     require_slot(slot)
-    b = charger_state["batteries"][slot]
-    b["slotState"] = "empty"
-    b["stateOfChargePercent"] = 0.0
-    b["timeRemainingSeconds"] = 0
-    b["batteryDetected"] = ""
-    b["errorMsg"] = ""
+    if not twin.available:
+        raise HTTPException(status_code=503, detail="firmware snapshot library not loaded")
+    bay_overrides.pop(slot, None)
+    apply_twin_snap(twin.pull(slot))
+    twin_glass.invalidate()
     notify_state_change()
     return {"ok": True}
 
@@ -451,70 +495,48 @@ async def bulk_insert(
     no_aa: bool = Query(False, description="When true, only insert AAA batteries"),
     no_aaa: bool = Query(False, description="When true, only insert AA batteries"),
 ):
-    """Insert 37 batteries with random SOC levels and optional AA/AAA filtering."""
+    """Fill: deal a different rack each time. States come from the firmware seat step."""
     import random
 
     if no_aa and no_aaa:
         raise HTTPException(status_code=400, detail="Cannot set both no_aa and no_aaa")
+    if not twin.available:
+        raise HTTPException(status_code=503, detail="firmware snapshot library not loaded")
 
-    for b in charger_state["batteries"]:
-        b["slotState"] = "empty"
-        b["stateOfChargePercent"] = 0.0
-        b["timeRemainingSeconds"] = 0
-        b["batteryDetected"] = ""
-        b["errorMsg"] = ""
-
+    bay_overrides.clear()
+    twin.clear_all()
     battery_types = ["KLVR-AA", "KLVR-AAA"]
     if no_aa:
         battery_types = ["KLVR-AAA"]
     elif no_aaa:
         battery_types = ["KLVR-AA"]
 
-    slots_to_fill = random.sample(range(48), 37)
-    full_batteries_count = random.randint(4, 5)
-    full_battery_slots = random.sample(slots_to_fill, full_batteries_count)
+    n = random.randint(12, 40)
+    slots_to_fill = random.sample(range(48), n)
+    full_batteries_count = random.randint(2, max(3, n // 8))
+    full_battery_slots = set(random.sample(slots_to_fill, min(full_batteries_count, n)))
 
     batteries_inserted = []
-    full_count = 0
-
     for slot in slots_to_fill:
         battery_type = random.choice(battery_types)
-
         if slot in full_battery_slots:
-            soc = 100.0
-            full_count += 1
-            slot_state = "done"
-            time_remaining = 0
+            soc = 100
+            rem = 0
         else:
-            soc = random.uniform(5.0, 95.0)
-            slot_state = "charging"
-            remaining_charge_needed = max(0, 100.0 - soc)
-            total_charge_range = 95.0
-            total_time_for_full_charge = 7200
-            time_remaining = int((remaining_charge_needed / total_charge_range) * total_time_for_full_charge)
+            soc = random.randint(5, 90)
+            rem = random.randint(600, 8000)
+        twin.seat(slot, twin_snapshot.type_code(battery_type), soc, 24, rem)
+        batteries_inserted.append({"index": slot, "type": battery_type, "soc": soc, "timeRemaining": rem})
 
-        b = charger_state["batteries"][slot]
-        b["slotState"] = slot_state
-        b["stateOfChargePercent"] = soc
-        b["timeRemainingSeconds"] = time_remaining
-        b["batteryDetected"] = battery_type
-        b["errorMsg"] = ""
-
-        batteries_inserted.append({
-            "index": slot,
-            "type": battery_type,
-            "soc": round(soc, 1),
-            "timeRemaining": time_remaining
-        })
-
+    apply_twin_snap(twin.tick())
+    twin_glass.invalidate()
+    full_count = len(full_battery_slots)
     aa_count = len([b for b in batteries_inserted if b["type"] == "KLVR-AA"])
     aaa_count = len([b for b in batteries_inserted if b["type"] == "KLVR-AAA"])
-    print(f"🔋 Bulk inserted 37 batteries: {aa_count} AA, {aaa_count} AAA ({full_count} full)")
-
     notify_state_change()
     return {
         "ok": True,
-        "message": f"Successfully inserted 37 batteries ({full_count} full)",
+        "message": f"Filled {len(batteries_inserted)} bays ({full_count} full)",
         "batteries": batteries_inserted,
         "summary": {
             "total": len(batteries_inserted),
@@ -532,10 +554,9 @@ async def bulk_insert(
 async def set_cold(slot: int):
     """Set a slot to cold state (BATTERY_STATE_TEMP_COLD)."""
     require_occupied(slot)
-    b = charger_state["batteries"][slot]
-    b["slotState"] = "cold"
-    b["errorMsg"] = "cold"
-    b["timeRemainingSeconds"] = 0
+    bay_overrides[slot] = {"slotState": "cold", "errorMsg": "cold", "timeRemainingSeconds": 0}
+    if twin.available:
+        apply_twin_snap(twin.tick())
     notify_state_change()
     return {"ok": True}
 
@@ -544,23 +565,21 @@ async def set_cold(slot: int):
 async def set_warm(slot: int):
     """Set a slot to warm state (BATTERY_STATE_TEMP_WARM)."""
     require_occupied(slot)
-    b = charger_state["batteries"][slot]
-    b["slotState"] = "warm"
-    b["errorMsg"] = "warm"
-    b["timeRemainingSeconds"] = 0
+    bay_overrides[slot] = {"slotState": "warm", "errorMsg": "warm", "timeRemainingSeconds": 0}
+    if twin.available:
+        apply_twin_snap(twin.tick())
     notify_state_change()
     return {"ok": True}
 
 
 @app.post("/api/v2/charger/bulk_clear")
 async def bulk_clear():
-    """Eject all batteries at once."""
-    for b in charger_state["batteries"]:
-        b["slotState"] = "empty"
-        b["stateOfChargePercent"] = 0.0
-        b["timeRemainingSeconds"] = 0
-        b["batteryDetected"] = ""
-        b["errorMsg"] = ""
+    """Empty the rack through the firmware pull step."""
+    if not twin.available:
+        raise HTTPException(status_code=503, detail="firmware snapshot library not loaded")
+    bay_overrides.clear()
+    apply_twin_snap(twin.clear_all())
+    twin_glass.invalidate()
     notify_state_change()
     return {"ok": True}
 
@@ -573,10 +592,9 @@ async def set_error(slot: int, type: str = Query(...)):
     require_occupied(slot)
     if type not in VALID_ERROR_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid error type. Must be one of: {', '.join(sorted(VALID_ERROR_TYPES))}")
-    b = charger_state["batteries"][slot]
-    b["slotState"] = "error"
-    b["errorMsg"] = type
-    b["timeRemainingSeconds"] = 0
+    bay_overrides[slot] = {"slotState": "error", "errorMsg": type, "timeRemainingSeconds": 0}
+    if twin.available:
+        apply_twin_snap(twin.tick())
     notify_state_change()
     return {"ok": True}
 
@@ -745,33 +763,29 @@ async def set_target_version(request: Request):
 
 @app.post("/api/v2/charger/set_charge/{slot}")
 async def set_charge_percentage(slot: int, request: Request):
-    """Manually set charge percentage for a specific slot"""
+    """Inject a SoC reading and re-seat through the firmware step."""
     try:
         data = await request.json()
         percentage = float(data.get("percentage", 0.0))
-
         require_occupied(slot)
         if percentage < 0 or percentage > 100:
             raise HTTPException(status_code=400, detail="Percentage must be between 0 and 100")
-
-        battery = charger_state["batteries"][slot]
-        battery["stateOfChargePercent"] = percentage
-
-        if battery["slotState"] == "charging" and percentage < 100:
-            remaining_charge_needed = max(0, 100.0 - percentage)
-            total_charge_range = 95.0
-            total_time_for_full_charge = 7200
-            battery["timeRemainingSeconds"] = int((remaining_charge_needed / total_charge_range) * total_time_for_full_charge)
-        elif percentage >= 100:
-            battery["slotState"] = "done"
-            battery["timeRemainingSeconds"] = 0
-            battery["errorMsg"] = ""
-        elif battery["slotState"] == "empty":
-            battery["timeRemainingSeconds"] = 0
-
-        print(f"🔋 Set slot {slot} charge to: {percentage}% (remaining: {battery['timeRemainingSeconds']}s)")
+        if not twin.available:
+            raise HTTPException(status_code=503, detail="firmware snapshot library not loaded")
+        b = charger_state["batteries"][slot]
+        detected = b.get("batteryDetected") or "KLVR-AA"
+        soc = int(round(percentage))
+        rem = 0 if soc >= 100 else max(60, (100 - soc) * 60)
+        bay_overrides.pop(slot, None)
+        apply_twin_snap(twin.seat(slot, twin_snapshot.type_code(detected), soc, 24, rem))
         notify_state_change()
-        return {"status": "success", "index": slot, "percentage": percentage, "timeRemaining": battery["timeRemainingSeconds"]}
+        out = charger_state["batteries"][slot]
+        return {
+            "status": "success",
+            "index": slot,
+            "percentage": out["stateOfChargePercent"],
+            "timeRemaining": out["timeRemainingSeconds"],
+        }
     except HTTPException:
         raise
     except ValueError:
@@ -781,37 +795,92 @@ async def set_charge_percentage(slot: int, request: Request):
         raise HTTPException(status_code=500, detail="Failed to set charge percentage")
 
 
+@app.get("/api/v2/twin/meta")
+def twin_meta():
+    return {
+        "firmware_pin": twin_snapshot.firmware_pin(),
+        "lib_path": twin.lib_path,
+        "available": twin.available,
+        "glass_renderer": str(twin_glass.render_bin()) if twin_glass.render_bin() else None,
+        "encoder": dict(encoder_state),
+    }
+
+
+@app.get("/api/v2/twin/lights")
+def twin_lights():
+    if twin.available:
+        apply_twin_snap(twin.tick())
+    return {"lights": charger_state.get("bay_lights") or []}
+
+
+@app.get("/api/v2/twin/glass")
+def twin_glass_png():
+    """480×128 PNG from tools/ui-simulator (same pixels as display CI)."""
+    if twin.available:
+        apply_twin_snap(twin.tick())
+    status = {
+        "batteries": charger_state["batteries"],
+        "displayOverlay": charger_state.get("displayOverlay", "none"),
+    }
+    png = twin_glass.render_png(
+        status,
+        name=charger_state.get("name") or "Klvr",
+        version=charger_state.get("firmwareVersion") or "1.9.1",
+        screen=encoder_state.get("screen") or "main",
+        clicks=int(encoder_state.get("clicks") or 0),
+        network=charger_state.get("network"),
+    )
+    if not png:
+        raise HTTPException(
+            status_code=503,
+            detail="ui-simulator render not built (make -C tools/ui-simulator in FIRMWARE_ROOT)",
+        )
+    return Response(content=png, media_type="image/png")
+
+
+@app.post("/api/v2/twin/encoder")
+async def twin_encoder(request: Request):
+    """Knob detents / press → same glass inputs as MAIN (targeting, network ≥1 s)."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    detents = int(body.get("detents") or 0)
+    if detents:
+        encoder_state["detents"] = encoder_state.get("detents", 0) + detents
+        encoder_state["clicks"] = max(
+            0, min(100, int(encoder_state.get("clicks") or 0) + detents)
+        )
+    if "pressed" in body:
+        was = bool(encoder_state.get("pressed"))
+        now = bool(body["pressed"])
+        encoder_state["pressed"] = now
+        if now and not was:
+            encoder_state["press_ms"] = int(time.time() * 1000)
+        elif was and not now:
+            held = int(time.time() * 1000) - int(encoder_state.get("press_ms") or 0)
+            # UI_LONG_PRESS_MS = 1000: long press on main opens network settings.
+            if held >= 1000 and encoder_state.get("screen") == "main":
+                encoder_state["screen"] = "network_settings"
+            elif held < 1000 and encoder_state.get("screen") == "network_settings":
+                encoder_state["screen"] = "main"
+            encoder_state["press_ms"] = 0
+    twin_glass.invalidate()
+    return {"ok": True, "encoder": encoder_state}
+
+
 @app.get("/", response_class=HTMLResponse)
 def ui():
     return Path("templates/index.html").read_text()
 
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    # Browsers request this by default; map it to the logo so the console stays quiet.
+    return FileResponse("static/klvr-logo.png", media_type="image/png")
+
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-# Charging simulation — runs in a background thread
-def loop():
-    while True:
-        changed = False
-        for b in charger_state["batteries"]:
-            if b["slotState"] in ("cold", "warm"):
-                # Temperature-paused states — do not increment charge
-                continue
-            if b["slotState"] == "charging":
-                # 95% in 2 hours = 0.0264% every 2 seconds
-                b["stateOfChargePercent"] = min(100.0, b["stateOfChargePercent"] + 0.0264)
-                b["timeRemainingSeconds"] = max(0, b["timeRemainingSeconds"] - 2)
-                if b["stateOfChargePercent"] >= 100.0:
-                    b["slotState"] = "done"
-                    b["timeRemainingSeconds"] = 0
-                changed = True
-
-        if changed and _event_loop is not None:
-            try:
-                asyncio.run_coroutine_threadsafe(ws_broadcast(), _event_loop)
-            except Exception:
-                pass
-
-        time.sleep(2)
 
 
 def bonjour():
@@ -834,5 +903,10 @@ def bonjour():
 
 
 # Start background threads
-threading.Thread(target=loop, daemon=True).start()
 threading.Thread(target=bonjour, daemon=True).start()
+
+if twin.available:
+    apply_twin_snap(twin.tick())
+    print(f"🔌 Firmware twin snapshot: {twin.lib_path} (pin {twin_snapshot.firmware_pin()[:12]})")
+else:
+    print("⚠️  libcharger_twin not loaded — seat/Fill/status need CHARGER_TWIN_LIB")
