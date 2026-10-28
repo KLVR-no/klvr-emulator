@@ -5,11 +5,12 @@ import atexit
 import asyncio
 import json
 from fastapi import FastAPI, Request, Query, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from zeroconf import ServiceInfo, Zeroconf
 
+from klvr_emulator import glass as twin_glass
 from klvr_emulator import snapshot as twin_snapshot
 
 # Firmware: system_settings.name is char[20]; default brand string is Klvr.
@@ -64,6 +65,11 @@ twin = twin_snapshot.FirmwareSnapshot()
 _last_snap: dict = {}
 # Lab injects (set_cold / set_warm / set_error) until the next seat/pull clears them.
 bay_overrides: dict[int, dict] = {}
+
+
+# Knob / encoder edges for the twin window (firmware glass consumes these
+# when the LVGL path is linked; today they are recorded for the engineer view).
+encoder_state = {"detents": 0, "pressed": False, "press_ms": 0}
 
 
 def apply_twin_snap(snap: dict) -> None:
@@ -385,6 +391,18 @@ async def post_device_name(request: Request):
 
 @app.api_route("/api/v2/device/identify", methods=["GET", "POST"])
 def device_identify():
+    """Identify: firmware breath on all bays for ~10 s (UX-11)."""
+    if twin.available:
+        twin.set_identify(True)
+
+        def _end():
+            time.sleep(10)
+            twin.set_identify(False)
+            twin_glass.invalidate()
+
+        threading.Thread(target=_end, daemon=True).start()
+        apply_twin_snap(twin.tick())
+        notify_state_change()
     return _plain(200)
 
 
@@ -450,6 +468,7 @@ async def insert(slot: int, type: str = Query(...)):
     # Injected readings: low SoC cell, remaining for the twin Fill/seat path.
     rem = 90 * 60
     apply_twin_snap(twin.seat(slot, twin_snapshot.type_code(type), 5, 24, rem))
+    twin_glass.invalidate()
     notify_state_change()
     return {"ok": True}
 
@@ -461,6 +480,7 @@ async def eject(slot: int):
         raise HTTPException(status_code=503, detail="firmware snapshot library not loaded")
     bay_overrides.pop(slot, None)
     apply_twin_snap(twin.pull(slot))
+    twin_glass.invalidate()
     notify_state_change()
     return {"ok": True}
 
@@ -504,6 +524,7 @@ async def bulk_insert(
         batteries_inserted.append({"index": slot, "type": battery_type, "soc": soc, "timeRemaining": rem})
 
     apply_twin_snap(twin.tick())
+    twin_glass.invalidate()
     full_count = len(full_battery_slots)
     aa_count = len([b for b in batteries_inserted if b["type"] == "KLVR-AA"])
     aaa_count = len([b for b in batteries_inserted if b["type"] == "KLVR-AAA"])
@@ -553,6 +574,7 @@ async def bulk_clear():
         raise HTTPException(status_code=503, detail="firmware snapshot library not loaded")
     bay_overrides.clear()
     apply_twin_snap(twin.clear_all())
+    twin_glass.invalidate()
     notify_state_change()
     return {"ok": True}
 
@@ -774,6 +796,8 @@ def twin_meta():
         "firmware_pin": twin_snapshot.firmware_pin(),
         "lib_path": twin.lib_path,
         "available": twin.available,
+        "glass_renderer": str(twin_glass.render_bin()) if twin_glass.render_bin() else None,
+        "encoder": dict(encoder_state),
     }
 
 
@@ -784,9 +808,56 @@ def twin_lights():
     return {"lights": charger_state.get("bay_lights") or []}
 
 
+@app.get("/api/v2/twin/glass")
+def twin_glass_png():
+    """480×128 PNG from tools/ui-simulator (same pixels as display CI)."""
+    if twin.available:
+        apply_twin_snap(twin.tick())
+    status = {
+        "batteries": charger_state["batteries"],
+        "displayOverlay": charger_state.get("displayOverlay", "none"),
+    }
+    png = twin_glass.render_png(
+        status,
+        name=charger_state.get("name") or "Klvr",
+        version=charger_state.get("firmwareVersion") or "1.9.1",
+    )
+    if not png:
+        raise HTTPException(
+            status_code=503,
+            detail="ui-simulator render not built (make -C tools/ui-simulator in FIRMWARE_ROOT)",
+        )
+    return Response(content=png, media_type="image/png")
+
+
+@app.post("/api/v2/twin/encoder")
+async def twin_encoder(request: Request):
+    """Knob detents / press from the twin window."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    detents = int(body.get("detents") or 0)
+    if detents:
+        encoder_state["detents"] = encoder_state.get("detents", 0) + detents
+    if "pressed" in body:
+        encoder_state["pressed"] = bool(body["pressed"])
+        if encoder_state["pressed"]:
+            encoder_state["press_ms"] = int(time.time() * 1000)
+    twin_glass.invalidate()
+    return {"ok": True, "encoder": encoder_state}
+
+
 @app.get("/", response_class=HTMLResponse)
 def ui():
     return Path("templates/index.html").read_text()
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    # Browsers request this by default; map it to the logo so the console stays quiet.
+    return FileResponse("static/klvr-logo.png", media_type="image/png")
+
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 

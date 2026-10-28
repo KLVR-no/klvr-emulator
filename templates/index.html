@@ -3,14 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="/static/klvr-logo.png" type="image/png">
   <title>Klvr Charger Pro</title>
   <style>
     :root {
-      --bg: #0a0a0a;
-      --fg: #f5f5f5;
-      --muted: #8a8a8a;
-      --well: #1a1a1a;
-      --well-border: #2e2e2e;
+      --bg: #050505;
+      --fg: #f2f2f2;
+      --muted: #7a7a7a;
+      --well: #121212;
+      --well-border: #2a2a2a;
+      --cell: #2c2c2c;
       --control: #3b82f6;
       --glass-w: 480px;
       --glass-h: 128px;
@@ -19,75 +21,88 @@
     html, body {
       margin: 0; min-height: 100%;
       background: var(--bg); color: var(--fg);
-      font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+      font-family: "SF Pro Text", "SF Pro Display", ui-sans-serif, system-ui, -apple-system, sans-serif;
     }
     body {
       display: flex; align-items: center; justify-content: center;
-      padding: 48px 24px; min-height: 100vh;
+      padding: 56px 24px; min-height: 100vh;
     }
     .charger {
-      display: flex; flex-direction: column; gap: 28px;
-      width: min(920px, 100%);
+      display: flex; flex-direction: column; gap: 36px;
+      width: min(960px, 100%);
     }
     .face {
-      display: flex; align-items: center; gap: 20px;
+      display: flex; align-items: center; gap: 24px;
       justify-content: center;
     }
     .glass-wrap {
       width: var(--glass-w); height: var(--glass-h);
-      background: #111; border: 1px solid #333; border-radius: 4px;
+      background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 3px;
       overflow: hidden; image-rendering: pixelated;
-      position: relative;
+      position: relative; box-shadow: inset 0 0 0 1px #111;
     }
-    .glass-wrap canvas {
+    .glass-wrap img, .glass-wrap canvas {
       width: 100%; height: 100%; display: block;
     }
-    .glass-label {
-      position: absolute; inset: 0; display: flex; align-items: center;
-      justify-content: center; color: var(--muted); font-size: 12px;
-      letter-spacing: 0.04em; pointer-events: none;
-    }
     .knob {
-      width: 56px; height: 56px; border-radius: 50%;
-      background: radial-gradient(circle at 35% 30%, #4a4a4a, #1c1c1c 70%);
-      border: 2px solid #555; cursor: grab; position: relative;
+      width: 64px; height: 64px; border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #3a3a3a, #141414 72%);
+      border: 2px solid #4a4a4a; cursor: grab; position: relative;
       touch-action: none; flex-shrink: 0;
+      transition: border-color 160ms ease;
     }
     .knob::after {
-      content: ""; position: absolute; left: 50%; top: 8px;
-      width: 3px; height: 14px; margin-left: -1.5px;
-      background: #ddd; border-radius: 1px;
-      transform-origin: 50% 20px;
+      content: ""; position: absolute; left: 50%; top: 10px;
+      width: 3px; height: 16px; margin-left: -1.5px;
+      background: #e8e8e8; border-radius: 1px;
+      transform-origin: 50% 22px;
     }
-    .knob.turning { cursor: grabbing; }
-    .rack {
-      display: flex; flex-direction: column; gap: 16px;
-    }
-    .row {
-      display: flex; gap: 24px; justify-content: center;
-    }
+    .knob.turning { cursor: grabbing; border-color: #888; }
+    .rack { display: flex; flex-direction: column; gap: 18px; }
+    .row { display: flex; gap: 28px; justify-content: center; }
     .half {
-      display: grid; grid-template-columns: repeat(12, 28px); gap: 6px;
+      display: grid; grid-template-columns: repeat(12, 30px); gap: 7px;
     }
     .well {
-      width: 28px; height: 44px; border-radius: 4px;
+      width: 30px; height: 52px; border-radius: 5px;
       background: var(--well); border: 1px solid var(--well-border);
       cursor: pointer; position: relative;
       transition: transform 160ms ease, border-color 160ms ease;
     }
-    .well:hover { border-color: #666; }
+    .well:hover { border-color: #555; }
     .well:active { transform: scale(0.96); }
     .well .cell {
-      position: absolute; left: 4px; right: 4px; top: 6px; bottom: 6px;
-      border-radius: 2px; background: #2a2a2a;
+      position: absolute; left: 5px; right: 5px; top: 7px; bottom: 10px;
+      border-radius: 3px; background: var(--cell);
+      border: 1px solid #3a3a3a;
+    }
+    .well .cell.aaa { transform: scale(0.78); transform-origin: center bottom; }
+    .well .fill {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      background: #3a3a3a; border-radius: 0 0 2px 2px;
+      transition: height 200ms ease;
     }
     .well .light {
-      position: absolute; left: 50%; bottom: 3px; width: 8px; height: 3px;
-      margin-left: -4px; border-radius: 1px; background: transparent;
+      position: absolute; left: 50%; bottom: 3px; width: 10px; height: 3px;
+      margin-left: -5px; border-radius: 1px; background: transparent;
+      transition: background 80ms linear;
     }
-    .bar {
-      display: flex; align-items: center; justify-content: center; gap: 12px;
-      flex-wrap: wrap;
+    .status {
+      text-align: center; color: var(--muted); font-size: 12px; min-height: 1.2em;
+    }
+    .engineer {
+      margin-top: 4px; border-top: 1px solid #1c1c1c; padding-top: 18px;
+      color: var(--muted); font-size: 12px;
+    }
+    .engineer summary {
+      cursor: pointer; color: var(--fg); margin-bottom: 14px;
+      list-style: none; font-size: 13px; letter-spacing: 0.02em;
+    }
+    .engineer summary::-webkit-details-marker { display: none; }
+    .engineer code { color: #cfcfcf; }
+    .engineer .bar {
+      display: flex; align-items: center; justify-content: flex-start; gap: 12px;
+      flex-wrap: wrap; margin: 14px 0 18px;
     }
     .switch {
       display: inline-flex; border: 1px solid #333; border-radius: 8px; overflow: hidden;
@@ -104,55 +119,48 @@
       transition: background 160ms ease, color 160ms ease;
     }
     .bar .action:hover { background: var(--control); color: #fff; }
-    .engineer {
-      margin-top: 8px; border-top: 1px solid #222; padding-top: 16px;
-      color: var(--muted); font-size: 12px;
-    }
-    .engineer summary { cursor: pointer; color: var(--fg); margin-bottom: 8px; }
-    .engineer code { color: #ccc; }
-    .status { text-align: center; color: var(--muted); font-size: 12px; min-height: 1.2em; }
+    .meta { display: grid; gap: 6px; }
   </style>
 </head>
 <body>
   <div class="charger">
     <div class="face">
       <div class="glass-wrap">
-        <canvas id="glass" width="480" height="128"></canvas>
-        <div class="glass-label" id="glassLabel">480×128</div>
+        <img id="glass" width="480" height="128" alt="Charger display" />
       </div>
       <div class="knob" id="knob" title="Encoder" aria-label="Encoder knob"></div>
     </div>
 
     <div class="rack" id="rack"></div>
-
-    <div class="bar">
-      <div class="switch" role="group" aria-label="Cell type">
-        <button type="button" id="typeAA" class="on">AA</button>
-        <button type="button" id="typeAAA">AAA</button>
-      </div>
-      <button type="button" class="action" id="empty">Empty</button>
-      <button type="button" class="action" id="fill">Fill</button>
-    </div>
     <div class="status" id="status"></div>
 
     <details class="engineer">
       <summary>Engineer</summary>
-      <div>Firmware pin: <code id="pin">…</code></div>
-      <div>Snapshot: <code id="snapPath">…</code></div>
-      <div>Verdict: <code id="verdict">…</code></div>
-      <div>Clock: real time (breath from firmware)</div>
+      <div class="bar">
+        <div class="switch" role="group" aria-label="Cell type">
+          <button type="button" id="typeAA" class="on">AA</button>
+          <button type="button" id="typeAAA">AAA</button>
+        </div>
+        <button type="button" class="action" id="empty">Empty</button>
+        <button type="button" class="action" id="fill">Fill</button>
+        <button type="button" class="action" id="identify">Identify</button>
+      </div>
+      <div class="meta">
+        <div>Firmware pin: <code id="pin">…</code></div>
+        <div>Snapshot: <code id="snapPath">…</code></div>
+        <div>Glass: <code id="glassPath">…</code></div>
+        <div>Verdict: <code id="verdict">…</code></div>
+      </div>
     </details>
   </div>
 
   <script>
-    const N = 48;
     let cellType = "KLVR-AA";
     let knobAngle = 0;
+    let lastDetent = 0;
     const rack = document.getElementById("rack");
     const statusEl = document.getElementById("status");
     const glass = document.getElementById("glass");
-    const gctx = glass.getContext("2d");
-    const glassLabel = document.getElementById("glassLabel");
 
     function buildRack() {
       rack.innerHTML = "";
@@ -167,7 +175,7 @@
             const well = document.createElement("div");
             well.className = "well";
             well.dataset.bay = String(bay);
-            well.innerHTML = '<div class="cell" hidden></div><div class="light"></div>';
+            well.innerHTML = '<div class="cell" hidden><div class="fill"></div></div><div class="light"></div>';
             well.addEventListener("click", () => onWell(bay));
             halfEl.appendChild(well);
           }
@@ -180,31 +188,45 @@
     async function api(path, opts) {
       const r = await fetch(path, opts);
       if (!r.ok) throw new Error(await r.text() || r.statusText);
-      return r.headers.get("content-type")?.includes("json") ? r.json() : r.text();
-    }
-
-    function paintGlassPlaceholder() {
-      gctx.fillStyle = "#111";
-      gctx.fillRect(0, 0, 480, 128);
-      gctx.fillStyle = "#3a3a3a";
-      gctx.font = "14px ui-sans-serif, system-ui, sans-serif";
-      gctx.textAlign = "center";
-      gctx.fillText("Firmware glass", 240, 60);
-      gctx.font = "11px ui-sans-serif, system-ui, sans-serif";
-      gctx.fillText("frame from pinned tick when LVGL is linked", 240, 80);
+      const ct = r.headers.get("content-type") || "";
+      if (ct.includes("json")) return r.json();
+      if (ct.includes("png") || ct.includes("octet")) return r.blob();
+      return r.text();
     }
 
     function paintBay(well, bat, led) {
       const cell = well.querySelector(".cell");
+      const fill = well.querySelector(".fill");
       const light = well.querySelector(".light");
       const occupied = bat && bat.slotState !== "empty";
       cell.hidden = !occupied;
-      if (!led || !occupied) {
+      if (!occupied) {
+        light.style.background = "transparent";
+        return;
+      }
+      const aaa = (bat.batteryDetected || "").includes("AAA");
+      cell.classList.toggle("aaa", aaa);
+      const pct = Math.max(0, Math.min(100, Number(bat.stateOfChargePercent) || 0));
+      fill.style.height = (bat.slotState === "done" ? 100 : pct) + "%";
+      if (!led) {
         light.style.background = "transparent";
         return;
       }
       const a = Math.max(0, Math.min(1, (led.brightness || 0) / 255));
-      light.style.background = `rgba(${led.r},${led.g},${led.b},${0.25 + 0.75 * a})`;
+      light.style.background = `rgba(${led.r},${led.g},${led.b},${0.2 + 0.8 * a})`;
+    }
+
+    async function refreshGlass() {
+      try {
+        const blob = await api("/api/v2/twin/glass");
+        const url = URL.createObjectURL(blob);
+        const prev = glass.dataset.url;
+        glass.src = url;
+        glass.dataset.url = url;
+        if (prev) URL.revokeObjectURL(prev);
+      } catch (_) {
+        /* renderer optional until built */
+      }
     }
 
     async function refresh() {
@@ -214,9 +236,8 @@
         const i = Number(well.dataset.bay);
         paintBay(well, s.batteries[i], lights[i] || null);
       });
-      const t = s.totals || {};
       document.getElementById("verdict").textContent = JSON.stringify({
-        totals: t,
+        totals: s.totals || {},
         eta: s.etaSeconds,
         overlay: s.displayOverlay || "none",
       });
@@ -234,6 +255,7 @@
           await api(`/api/v2/charger/eject/${bay}`, { method: "POST" });
         }
         await refresh();
+        refreshGlass();
       } catch (e) {
         statusEl.textContent = String(e.message || e);
       }
@@ -252,7 +274,7 @@
     document.getElementById("empty").onclick = async () => {
       try {
         await api("/api/v2/charger/bulk_clear", { method: "POST" });
-        await refresh();
+        await refresh(); refreshGlass();
       } catch (e) { statusEl.textContent = String(e.message || e); }
     };
     document.getElementById("fill").onclick = async () => {
@@ -260,15 +282,37 @@
         const no_aaa = cellType === "KLVR-AA";
         const no_aa = cellType === "KLVR-AAA";
         await api(`/api/v2/charger/bulk_insert?no_aa=${no_aa}&no_aaa=${no_aaa}`, { method: "POST" });
-        await refresh();
+        await refresh(); refreshGlass();
+      } catch (e) { statusEl.textContent = String(e.message || e); }
+    };
+    document.getElementById("identify").onclick = async () => {
+      try {
+        await api("/api/v2/device/identify", { method: "POST" });
+        await refresh(); refreshGlass();
       } catch (e) { statusEl.textContent = String(e.message || e); }
     };
 
     const knob = document.getElementById("knob");
+    function reportEncoder(detents, pressed) {
+      const body = {};
+      if (detents) body.detents = detents;
+      if (pressed !== undefined) body.pressed = pressed;
+      api("/api/v2/twin/encoder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).catch(() => {});
+    }
     function setKnob(deg) {
+      const prev = knobAngle;
       knobAngle = deg;
-      knob.style.setProperty("--a", deg + "deg");
       knob.style.transform = `rotate(${deg}deg)`;
+      const detent = Math.round(deg / 15);
+      if (detent !== lastDetent) {
+        reportEncoder(detent - lastDetent);
+        lastDetent = detent;
+      }
+      void prev;
     }
     let dragging = false, lastAng = 0;
     function angFromEvent(e) {
@@ -280,6 +324,7 @@
     knob.addEventListener("pointerdown", (e) => {
       dragging = true; knob.classList.add("turning");
       lastAng = angFromEvent(e); knob.setPointerCapture(e.pointerId);
+      reportEncoder(0, true);
     });
     knob.addEventListener("pointermove", (e) => {
       if (!dragging) return;
@@ -290,7 +335,10 @@
       setKnob(knobAngle + d);
       lastAng = a;
     });
-    knob.addEventListener("pointerup", () => { dragging = false; knob.classList.remove("turning"); });
+    knob.addEventListener("pointerup", () => {
+      dragging = false; knob.classList.remove("turning");
+      reportEncoder(0, false);
+    });
     knob.addEventListener("wheel", (e) => {
       e.preventDefault();
       setKnob(knobAngle + (e.deltaY > 0 ? 15 : -15));
@@ -298,17 +346,18 @@
     window.addEventListener("keydown", (e) => {
       if (e.key === "ArrowLeft") setKnob(knobAngle - 15);
       if (e.key === "ArrowRight") setKnob(knobAngle + 15);
+      if (e.key === " ") { e.preventDefault(); reportEncoder(0, true); setTimeout(() => reportEncoder(0, false), 120); }
     });
 
     buildRack();
-    paintGlassPlaceholder();
     api("/api/v2/twin/meta").then((m) => {
       document.getElementById("pin").textContent = m.firmware_pin || "?";
       document.getElementById("snapPath").textContent = m.lib_path || "not loaded";
-      if (m.lib_path) glassLabel.hidden = true;
+      document.getElementById("glassPath").textContent = m.glass_renderer || "build ui-simulator";
     }).catch(() => {});
-    refresh().catch((e) => { statusEl.textContent = String(e.message || e); });
+    refresh().then(() => refreshGlass()).catch((e) => { statusEl.textContent = String(e.message || e); });
     setInterval(() => { refresh().catch(() => {}); }, 500);
+    setInterval(() => { refreshGlass().catch(() => {}); }, 1000);
   </script>
 </body>
 </html>
