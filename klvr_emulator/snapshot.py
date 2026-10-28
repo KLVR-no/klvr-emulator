@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -43,6 +44,7 @@ def _lib_candidates() -> list[Path]:
 class FirmwareSnapshot:
     def __init__(self) -> None:
         self._lib = None
+        self._lock = threading.RLock()
         self._started_ms = int(time.time() * 1000)
         # Emulator-owned hardware facts (SoC / remaining advance on the clock).
         self._readings: dict[int, dict] = {}
@@ -50,7 +52,8 @@ class FirmwareSnapshot:
         self._identify = False
         self._load()
         if self._lib is not None:
-            self._lib.charger_twin_reset()
+            with self._lock:
+                self._lib.charger_twin_reset()
 
     def _load(self) -> None:
         for path in _lib_candidates():
@@ -123,40 +126,44 @@ class FirmwareSnapshot:
             )
 
     def tick(self) -> dict:
-        if self._lib is None:
-            raise RuntimeError(
-                "libcharger_twin not found. Build tools/charger-twin from the "
-                f"pinned firmware commit ({firmware_pin()}) and set CHARGER_TWIN_LIB "
-                "or FIRMWARE_ROOT."
-            )
-        self._progress_readings()
-        self._lib.charger_twin_set_time(self._now_ms(), 1 if self._identify else 0)
-        self._lib.charger_twin_tick()
-        raw = self._lib.charger_twin_status_json()
-        if not raw:
-            raise RuntimeError("charger_twin_status_json returned empty")
-        return json.loads(raw.decode("utf-8"))
+        with self._lock:
+            if self._lib is None:
+                raise RuntimeError(
+                    "libcharger_twin not found. Build tools/charger-twin from the "
+                    f"pinned firmware commit ({firmware_pin()}) and set CHARGER_TWIN_LIB "
+                    "or FIRMWARE_ROOT."
+                )
+            self._progress_readings()
+            self._lib.charger_twin_set_time(self._now_ms(), 1 if self._identify else 0)
+            self._lib.charger_twin_tick()
+            raw = self._lib.charger_twin_status_json()
+            if not raw:
+                raise RuntimeError("charger_twin_status_json returned empty")
+            return json.loads(raw.decode("utf-8"))
 
     def seat(self, index: int, type_code: int, soc: int, temp_c: int = 24, remaining_s: int = 0) -> dict:
-        self._readings[index] = {
-            "type": type_code,
-            "soc": soc,
-            "temp_c": temp_c,
-            "remaining_s": remaining_s,
-        }
-        self._lib.charger_twin_seat_bay(index, type_code, soc, temp_c, remaining_s)
-        return self.tick()
+        with self._lock:
+            self._readings[index] = {
+                "type": type_code,
+                "soc": soc,
+                "temp_c": temp_c,
+                "remaining_s": remaining_s,
+            }
+            self._lib.charger_twin_seat_bay(index, type_code, soc, temp_c, remaining_s)
+            return self.tick()
 
     def pull(self, index: int) -> dict:
-        self._readings.pop(index, None)
-        self._lib.charger_twin_pull_bay(index)
-        return self.tick()
+        with self._lock:
+            self._readings.pop(index, None)
+            self._lib.charger_twin_pull_bay(index)
+            return self.tick()
 
     def clear_all(self) -> dict:
-        self._readings.clear()
-        for i in range(48):
-            self._lib.charger_twin_pull_bay(i)
-        return self.tick()
+        with self._lock:
+            self._readings.clear()
+            for i in range(48):
+                self._lib.charger_twin_pull_bay(i)
+            return self.tick()
 
 
 # Type codes match charger_thermal_bay / BATTERY_TYPE_*.

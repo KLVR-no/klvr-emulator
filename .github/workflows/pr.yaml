@@ -20,21 +20,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fork PRs don't get FIRMWARE_READ_TOKEN; twin library build needs it.
   tests:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Read firmware pin
+        id: pin
+        run: echo "sha=$(tr -d '[:space:]' < firmware.pin)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: KLVR-no/klvr-chargerpro-firmware
+          ref: ${{ steps.pin.outputs.sha }}
+          path: firmware
+          token: ${{ secrets.FIRMWARE_READ_TOKEN }}
+          persist-credentials: false
       - name: Build pinned firmware twin library
-        env:
-          TOKEN: ${{ secrets.FIRMWARE_READ_TOKEN }}
         run: |
-          pin=$(tr -d '[:space:]' < firmware.pin)
-          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/KLVR-no/klvr-chargerpro-firmware.git" firmware
-          git -C firmware fetch --depth 1 origin "$pin"
-          git -C firmware checkout "$pin"
           make -C firmware/tools/charger-twin all
           echo "CHARGER_TWIN_LIB=$PWD/firmware/build/charger-twin/libcharger_twin.so" >> "$GITHUB_ENV"
           echo "FIRMWARE_ROOT=$PWD/firmware" >> "$GITHUB_ENV"
@@ -51,14 +57,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Read firmware pin
+        id: pin
+        run: echo "sha=$(tr -d '[:space:]' < firmware.pin)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: KLVR-no/klvr-chargerpro-firmware
+          ref: ${{ steps.pin.outputs.sha }}
+          path: firmware-lib
+          token: ${{ secrets.FIRMWARE_READ_TOKEN }}
+          persist-credentials: false
       - name: Build pinned firmware twin library
-        env:
-          TOKEN: ${{ secrets.FIRMWARE_READ_TOKEN }}
         run: |
-          pin=$(tr -d '[:space:]' < firmware.pin)
-          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/KLVR-no/klvr-chargerpro-firmware.git" firmware-lib
-          git -C firmware-lib fetch --depth 1 origin "$pin"
-          git -C firmware-lib checkout "$pin"
           make -C firmware-lib/tools/charger-twin all
           echo "CHARGER_TWIN_LIB=$PWD/firmware-lib/build/charger-twin/libcharger_twin.so" >> "$GITHUB_ENV"
       - name: Start the emulator

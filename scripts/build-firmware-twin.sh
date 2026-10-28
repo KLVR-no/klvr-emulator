@@ -5,9 +5,10 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 pin="$(tr -d '[:space:]' < "$root/firmware.pin")"
 dest="${FIRMWARE_ROOT:-$root/firmware}"
 
-if [[ ! -d "$dest/.git" && ! -f "$dest/tools/charger-twin/Makefile" ]]; then
-	rm -rf "$dest"
+if [[ ! -d "$dest/.git" ]]; then
 	git clone --depth 1 "https://github.com/KLVR-no/klvr-chargerpro-firmware.git" "$dest"
+fi
+if [[ "$(git -C "$dest" rev-parse HEAD)" != "$pin" ]]; then
 	git -C "$dest" fetch --depth 1 origin "$pin"
 	git -C "$dest" checkout "$pin"
 fi
