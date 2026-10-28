@@ -27,7 +27,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Build pinned firmware twin library
+        env:
+          TOKEN: ${{ secrets.FIRMWARE_READ_TOKEN }}
+        run: |
+          pin=$(tr -d '[:space:]' < firmware.pin)
+          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/KLVR-no/klvr-chargerpro-firmware.git" firmware
+          git -C firmware fetch --depth 1 origin "$pin"
+          git -C firmware checkout "$pin"
+          make -C firmware/tools/charger-twin all
+          echo "CHARGER_TWIN_LIB=$PWD/firmware/build/charger-twin/libcharger_twin.so" >> "$GITHUB_ENV"
+          echo "FIRMWARE_ROOT=$PWD/firmware" >> "$GITHUB_ENV"
       - run: pip install -r requirements.txt
+      - run: chmod +x scripts/check-no-second-decider.sh && scripts/check-no-second-decider.sh
       - run: python -m unittest discover -s tests -v
 
   # Fork PRs don't get the secret; conformance runs on same-repo PRs and on every push to main.
@@ -39,6 +51,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Build pinned firmware twin library
+        env:
+          TOKEN: ${{ secrets.FIRMWARE_READ_TOKEN }}
+        run: |
+          pin=$(tr -d '[:space:]' < firmware.pin)
+          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/KLVR-no/klvr-chargerpro-firmware.git" firmware-lib
+          git -C firmware-lib fetch --depth 1 origin "$pin"
+          git -C firmware-lib checkout "$pin"
+          make -C firmware-lib/tools/charger-twin all
+          echo "CHARGER_TWIN_LIB=$PWD/firmware-lib/build/charger-twin/libcharger_twin.so" >> "$GITHUB_ENV"
       - name: Start the emulator
         run: |
           pip install -q -r requirements.txt
