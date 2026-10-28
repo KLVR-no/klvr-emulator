@@ -6,9 +6,11 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - main
+      - 'preview/**'
   push:
     branches:
       - main
+      - 'preview/**'
 
 permissions:
   contents: read
@@ -46,7 +48,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: KLVR-no/klvr-chargerpro-firmware
-          ref: release/v1.9.1
+          # A preview/<topic> branch is tested against the firmware branch of the same name.
+          ref: ${{ startsWith(github.base_ref || github.ref_name, 'preview/') && (github.base_ref || github.ref_name) || 'release/v1.9.1' }}
           path: firmware
           sparse-checkout: |
             scripts

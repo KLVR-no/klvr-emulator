@@ -4,3 +4,6 @@ reviews:
   auto_review:
     enabled: true
     auto_incremental_review: false
+    base_branches:
+      - main
+      - "preview/.*"
