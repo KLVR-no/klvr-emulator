@@ -107,20 +107,24 @@ class FirmwareSnapshot:
             return
         self._last_progress_ms = now
         # Rough wall-clock charge: ~1 % per 40 s → full from empty in ~67 min.
+        # Keep fractional SoC/remaining so 500 ms polls are not truncated to 0.
         dt_s = dt_ms / 1000.0
         for idx, r in list(self._readings.items()):
             if r.get("soc", 0) >= 100:
                 r["soc"] = 100
+                r["soc_f"] = 100.0
                 r["remaining_s"] = 0
+                r["rem_f"] = 0.0
                 continue
-            add = dt_s / 40.0
-            r["soc"] = min(100, int(r["soc"] + add))
-            rem = int(r.get("remaining_s") or 0)
-            if rem > 0:
-                r["remaining_s"] = max(0, rem - int(dt_s))
+            r["soc_f"] = min(100.0, float(r.get("soc_f", r["soc"])) + dt_s / 40.0)
+            r["soc"] = int(r["soc_f"])
+            r["rem_f"] = max(0.0, float(r.get("rem_f", r.get("remaining_s") or 0)) - dt_s)
+            r["remaining_s"] = int(r["rem_f"])
             if r["soc"] >= 100:
                 r["soc"] = 100
+                r["soc_f"] = 100.0
                 r["remaining_s"] = 0
+                r["rem_f"] = 0.0
             self._lib.charger_twin_seat_bay(
                 idx, r["type"], r["soc"], r["temp_c"], int(r["remaining_s"])
             )
@@ -143,13 +147,17 @@ class FirmwareSnapshot:
 
     def seat(self, index: int, type_code: int, soc: int, temp_c: int = 24, remaining_s: int = 0) -> dict:
         with self._lock:
+            # Advance other bays first so a new seat does not skip their slope.
+            self._progress_readings()
             self._readings[index] = {
                 "type": type_code,
-                "soc": soc,
+                "soc": int(soc),
+                "soc_f": float(soc),
                 "temp_c": temp_c,
-                "remaining_s": remaining_s,
+                "remaining_s": int(remaining_s),
+                "rem_f": float(remaining_s),
             }
-            self._lib.charger_twin_seat_bay(index, type_code, soc, temp_c, remaining_s)
+            self._lib.charger_twin_seat_bay(index, type_code, int(soc), temp_c, int(remaining_s))
             return self.tick()
 
     def pull(self, index: int) -> dict:
