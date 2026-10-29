@@ -71,6 +71,10 @@
     }
     .well:hover { border-color: #555; }
     .well:active { transform: scale(0.96); }
+    .well.pending {
+      border-color: var(--control);
+      box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.45);
+    }
     .well .cell {
       position: absolute; left: 5px; right: 5px; top: 7px; bottom: 10px;
       border-radius: 3px; background: var(--cell);
@@ -87,6 +91,17 @@
       margin-left: -5px; border-radius: 1px; background: transparent;
       transition: background 80ms linear;
     }
+    .type-pop {
+      position: fixed; z-index: 20; display: none;
+      background: #141414; border: 1px solid #333; border-radius: 10px;
+      padding: 6px; gap: 4px; box-shadow: 0 12px 40px rgba(0,0,0,0.55);
+    }
+    .type-pop.open { display: inline-flex; }
+    .type-pop button {
+      background: transparent; color: var(--fg); border: 0;
+      padding: 10px 18px; font: inherit; cursor: pointer; border-radius: 7px;
+    }
+    .type-pop button:hover { background: #222; }
     .status {
       text-align: center; color: var(--muted); font-size: 12px; min-height: 1.2em;
     }
@@ -132,6 +147,10 @@
     </div>
 
     <div class="rack" id="rack"></div>
+    <div class="type-pop" id="typePop" role="dialog" aria-label="Cell type">
+      <button type="button" data-type="KLVR-AA">AA</button>
+      <button type="button" data-type="KLVR-AAA">AAA</button>
+    </div>
     <div class="status" id="status"></div>
 
     <details class="engineer">
@@ -161,6 +180,54 @@
     const rack = document.getElementById("rack");
     const statusEl = document.getElementById("status");
     const glass = document.getElementById("glass");
+    const typePop = document.getElementById("typePop");
+    let paint = null; /* { mode: 'fill'|'eject', bays: Set, moved: bool, x, y } */
+    let suppressClick = false;
+    let pendingFill = null; /* number[] */
+
+    function setType(type) {
+      cellType = type;
+      document.getElementById("typeAA").classList.toggle("on", type === "KLVR-AA");
+      document.getElementById("typeAAA").classList.toggle("on", type === "KLVR-AAA");
+    }
+
+    function clearPending() {
+      document.querySelectorAll(".well.pending").forEach((w) => w.classList.remove("pending"));
+    }
+
+    function hideTypePop() {
+      typePop.classList.remove("open");
+      pendingFill = null;
+      clearPending();
+    }
+
+    function showTypePop(clientX, clientY, bays) {
+      pendingFill = bays;
+      const pad = 12;
+      typePop.classList.add("open");
+      const w = typePop.offsetWidth || 120;
+      const h = typePop.offsetHeight || 44;
+      let left = clientX - w / 2;
+      let top = clientY - h - 14;
+      left = Math.max(pad, Math.min(window.innerWidth - w - pad, left));
+      top = Math.max(pad, Math.min(window.innerHeight - h - pad, top));
+      typePop.style.left = left + "px";
+      typePop.style.top = top + "px";
+    }
+
+    function wellAt(clientX, clientY) {
+      const el = document.elementFromPoint(clientX, clientY);
+      return el && el.closest ? el.closest(".well") : null;
+    }
+
+    function addPaintBay(bay, occupied) {
+      if (!paint) return;
+      if (paint.mode === "fill" && occupied) return;
+      if (paint.mode === "eject" && !occupied) return;
+      paint.bays.add(bay);
+      const well = rack.querySelector(`.well[data-bay="${bay}"]`);
+      if (well) well.classList.add("pending");
+    }
 
     function buildRack() {
       rack.innerHTML = "";
@@ -176,7 +243,14 @@
             well.className = "well";
             well.dataset.bay = String(bay);
             well.innerHTML = '<div class="cell" hidden><div class="fill"></div></div><div class="light"></div>';
-            well.addEventListener("click", () => onWell(bay));
+            well.addEventListener("click", (e) => {
+              if (suppressClick) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+              }
+              onWell(bay);
+            });
             halfEl.appendChild(well);
           }
           rowEl.appendChild(halfEl);
@@ -250,8 +324,41 @@
         const s = await api("/api/v2/charger/status");
         const b = s.batteries[bay];
         if (b.slotState === "empty") {
-          await api(`/api/v2/charger/insert/${bay}?type=${encodeURIComponent(cellType)}`, { method: "POST" });
-        } else {
+          showTypePop(
+            window._lastPointerX || window.innerWidth / 2,
+            window._lastPointerY || window.innerHeight / 2,
+            [bay]
+          );
+          const well = rack.querySelector(`.well[data-bay="${bay}"]`);
+          if (well) well.classList.add("pending");
+          return;
+        }
+        await api(`/api/v2/charger/eject/${bay}`, { method: "POST" });
+        await refresh();
+        refreshGlass();
+      } catch (e) {
+        statusEl.textContent = String(e.message || e);
+      }
+    }
+
+    async function fillBays(bays, type) {
+      setType(type);
+      hideTypePop();
+      try {
+        for (const bay of bays) {
+          await api(`/api/v2/charger/insert/${bay}?type=${encodeURIComponent(type)}`, { method: "POST" });
+        }
+        await refresh();
+        refreshGlass();
+      } catch (e) {
+        statusEl.textContent = String(e.message || e);
+      }
+    }
+
+    async function ejectBays(bays) {
+      clearPending();
+      try {
+        for (const bay of bays) {
           await api(`/api/v2/charger/eject/${bay}`, { method: "POST" });
         }
         await refresh();
@@ -261,16 +368,80 @@
       }
     }
 
-    document.getElementById("typeAA").onclick = () => {
-      cellType = "KLVR-AA";
-      document.getElementById("typeAA").classList.add("on");
-      document.getElementById("typeAAA").classList.remove("on");
-    };
-    document.getElementById("typeAAA").onclick = () => {
-      cellType = "KLVR-AAA";
-      document.getElementById("typeAAA").classList.add("on");
-      document.getElementById("typeAA").classList.remove("on");
-    };
+    rack.addEventListener("pointerdown", (e) => {
+      const well = e.target.closest && e.target.closest(".well");
+      if (!well || e.button !== 0) return;
+      hideTypePop();
+      window._lastPointerX = e.clientX;
+      window._lastPointerY = e.clientY;
+      const bay = Number(well.dataset.bay);
+      const occupied = !well.querySelector(".cell").hidden;
+      paint = {
+        mode: occupied ? "eject" : "fill",
+        bays: new Set(),
+        moved: false,
+        x: e.clientX,
+        y: e.clientY,
+        pointerId: e.pointerId,
+      };
+      addPaintBay(bay, occupied);
+      rack.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    rack.addEventListener("pointermove", (e) => {
+      if (!paint) return;
+      window._lastPointerX = e.clientX;
+      window._lastPointerY = e.clientY;
+      if (Math.hypot(e.clientX - paint.x, e.clientY - paint.y) > 6) paint.moved = true;
+      const well = wellAt(e.clientX, e.clientY);
+      if (!well) return;
+      const bay = Number(well.dataset.bay);
+      const occupied = !well.querySelector(".cell").hidden;
+      addPaintBay(bay, occupied);
+    });
+    async function endPaint(e) {
+      if (!paint) return;
+      const done = paint;
+      paint = null;
+      try { rack.releasePointerCapture(done.pointerId); } catch (_) {}
+      const bays = [...done.bays].sort((a, b) => a - b);
+      if (!bays.length) {
+        clearPending();
+        return;
+      }
+      if (done.mode === "eject") {
+        suppressClick = true;
+        setTimeout(() => { suppressClick = false; }, 0);
+        await ejectBays(bays);
+        return;
+      }
+      /* fill: ask AA / AAA after paint (pointerdown preventDefault skips click) */
+      suppressClick = true;
+      setTimeout(() => { suppressClick = false; }, 0);
+      showTypePop(e.clientX || done.x, e.clientY || done.y, bays);
+    }
+    rack.addEventListener("pointerup", endPaint);
+    rack.addEventListener("pointercancel", () => {
+      paint = null;
+      clearPending();
+    });
+
+    typePop.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-type]");
+      if (!btn || !pendingFill) return;
+      fillBays(pendingFill, btn.dataset.type);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") hideTypePop();
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (typePop.classList.contains("open") && !typePop.contains(e.target) && !e.target.closest(".well")) {
+        hideTypePop();
+      }
+    });
+
+    document.getElementById("typeAA").onclick = () => setType("KLVR-AA");
+    document.getElementById("typeAAA").onclick = () => setType("KLVR-AAA");
     document.getElementById("empty").onclick = async () => {
       try {
         await api("/api/v2/charger/bulk_clear", { method: "POST" });

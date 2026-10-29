@@ -59,6 +59,20 @@ def _slot_to_state(slot: str, err: str) -> str:
     return "charging"
 
 
+def _mask_prefix(mask) -> int:
+    """ui-simulator wants CIDR bits 0..32; the API often sends dotted form."""
+    if mask is None:
+        return 24
+    s = str(mask).strip()
+    if s.isdigit():
+        return max(0, min(32, int(s)))
+    parts = s.split(".")
+    if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+        n = (int(parts[0]) << 24) | (int(parts[1]) << 16) | (int(parts[2]) << 8) | int(parts[3])
+        return bin(n & 0xFFFFFFFF).count("1")
+    return 24
+
+
 def status_to_state_text(
     status: dict,
     name: str = "Klvr",
@@ -81,7 +95,7 @@ def status_to_state_text(
         typ = network.get("type") or "dhcp"
         ip = network.get("ipAddress") or "0.0.0.0"
         gw = network.get("gatewayAddress") or "0.0.0.0"
-        mask = network.get("mask") or "24"
+        mask = _mask_prefix(network.get("mask"))
         mac = network.get("macAddress") or "02:4b:4c:56:52:01"
         lines.append(f"network {typ} ip={ip} gw={gw} mask={mask} mac={mac}")
     for b in status.get("batteries") or []:
@@ -124,22 +138,40 @@ def render_png(
         clicks=clicks,
         network=network,
     )
-    with tempfile.TemporaryDirectory(prefix="twin-glass-") as tmp:
-        state = Path(tmp) / "live.state"
-        out = Path(tmp) / "glass.png"
-        state.write_text(text)
-        try:
-            subprocess.run(
-                [str(bin_path), str(state), str(out)],
-                check=True,
-                capture_output=True,
-                timeout=20,
+    def _run(state_text: str) -> bytes | None:
+        with tempfile.TemporaryDirectory(prefix="twin-glass-") as tmp:
+            state = Path(tmp) / "live.state"
+            out = Path(tmp) / "glass.png"
+            state.write_text(state_text)
+            try:
+                proc = subprocess.run(
+                    [str(bin_path), str(state), str(out)],
+                    check=True,
+                    capture_output=True,
+                    timeout=20,
+                )
+                del proc
+            except subprocess.CalledProcessError as exc:
+                err = (exc.stderr or b"").decode("utf-8", "replace")[:400]
+                print(f"twin glass render failed ({exc.returncode}): {err}", flush=True)
+                return None
+            except (subprocess.SubprocessError, OSError) as exc:
+                print(f"twin glass render error: {exc}", flush=True)
+                return None
+            if not out.is_file():
+                return None
+            return out.read_bytes()
+
+    png = _run(text)
+    # Network screen needs a valid mask; if it fails, still show MAIN glass.
+    if png is None and screen != "main":
+        png = _run(
+            status_to_state_text(
+                status, name=name, version=version, screen="main", clicks=clicks
             )
-        except (subprocess.SubprocessError, OSError):
-            return None
-        if not out.is_file():
-            return None
-        png = out.read_bytes()
+        )
+    if png is None:
+        return None
     with _lock:
         _cache_png = png
         _cache_at = time.monotonic()
